@@ -1,60 +1,77 @@
 import './style.css'
-import heroImg from './assets/hero.png'
-import typescriptLogo from './assets/typescript.svg'
-import viteLogo from './assets/vite.svg'
-import { setupCounter } from './counter.ts'
+import { initializeGPU } from './gpu/context'
 
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-<section id="center">
-  <div class="hero">
-    <img src="${heroImg}" class="base" width="170" height="179">
-    <img src="${typescriptLogo}" class="framework" alt="TypeScript logo"/>
-    <img src="${viteLogo}" class="vite" alt="Vite logo" />
-  </div>
-  <div>
-    <h1>Get started</h1>
-    <p>Edit <code>src/main.ts</code> and save to test <code>HMR</code></p>
-  </div>
-  <button id="counter" type="button" class="counter"></button>
-</section>
+async function main() {
+  const canvas = document.querySelector('#gpu-canvas')
+  const status = document.querySelector('#status')
 
-<div class="ticks"></div>
+  if (
+    !(canvas instanceof HTMLCanvasElement) ||
+    !(status instanceof HTMLElement)
+  ) {
+    throw new Error('Missing canvas or status element.')
+  }
 
-<section id="next-steps">
-  <div id="docs">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#documentation-icon"></use></svg>
-    <h2>Documentation</h2>
-    <p>Your questions, answered</p>
-    <ul>
-      <li>
-        <a href="https://vite.dev/" target="_blank">
-          <img class="logo" src="${viteLogo}" alt="" />
-          Explore Vite
-        </a>
-      </li>
-      <li>
-        <a href="https://www.typescriptlang.org" target="_blank">
-          <img class="button-icon" src="${typescriptLogo}" alt="">
-          Learn more
-        </a>
-      </li>
-    </ul>
-  </div>
-  <div id="social">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#social-icon"></use></svg>
-    <h2>Connect with us</h2>
-    <p>Join the Vite community</p>
-    <ul>
-      <li><a href="https://github.com/vitejs/vite" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#github-icon"></use></svg>GitHub</a></li>
-      <li><a href="https://chat.vite.dev/" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#discord-icon"></use></svg>Discord</a></li>
-      <li><a href="https://x.com/vite_js" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#x-icon"></use></svg>X.com</a></li>
-      <li><a href="https://bsky.app/profile/vite.dev" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#bluesky-icon"></use></svg>Bluesky</a></li>
-    </ul>
-  </div>
-</section>
+  const { device, context } = await initializeGPU(canvas)
 
-<div class="ticks"></div>
-<section id="spacer"></section>
-`
+  const render = () => {
+    const pixelRatio = Math.min(window.devicePixelRatio, 2)
+    const limit = device.limits.maxTextureDimension2D
 
-setupCounter(document.querySelector<HTMLButtonElement>('#counter')!)
+    const width = Math.min(
+      limit,
+      Math.max(1, Math.round(canvas.clientWidth * pixelRatio)),
+    )
+
+    const height = Math.min(
+      limit,
+      Math.max(1, Math.round(canvas.clientHeight * pixelRatio)),
+    )
+
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width
+      canvas.height = height
+    }
+
+    const encoder = device.createCommandEncoder()
+
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: context.getCurrentTexture().createView(),
+          clearValue: { r: 0.03, g: 0.18, b: 0.22, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
+      ],
+    })
+
+    pass.end()
+    device.queue.submit([encoder.finish()])
+  }
+
+  device.addEventListener('uncapturederror', (event) => {
+    console.error(event.error)
+    status.textContent = `GPU error: ${event.error.message}`
+  })
+
+  render()
+  window.addEventListener('resize', render)
+  status.textContent = 'WebGPU ready'
+
+  void device.lost.then((info) => {
+    window.removeEventListener('resize', render)
+    status.textContent = `GPU device lost. Reload the page. ${info.message}`
+  })
+}
+
+main().catch((error: unknown) => {
+  console.error(error)
+
+  const status = document.querySelector('#status')
+
+  if (status) {
+    status.textContent =
+      error instanceof Error ? error.message : String(error)
+  }
+})
