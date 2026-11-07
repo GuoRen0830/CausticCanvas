@@ -2,12 +2,43 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>causticcanvas</title>
+    <title>Caustic Canvas</title>
   </head>
+
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <header>
+        <h1>Caustic Canvas</h1>
+        <p id="status">Initializing WebGPU…</p>
+      </header>
+
+      <main id="workspace">
+        <aside id="design-panel">
+          <h2>Design the light</h2>
+          <p>Draw a pattern with the white brush.</p>
+
+          <canvas id="target-canvas" aria-label="Light pattern drawing pad"></canvas>
+
+          <button id="clear-target" type="button">Clear</button>
+          <p id="target-status">Draw a pattern to begin.</p>
+
+          <section id="caustic-panel">
+            <h2>Caustic result</h2>
+            <canvas
+              id="caustic-canvas"
+              aria-label="Receiver irradiance preview"
+            ></canvas>
+            <p id="caustic-status">Waiting for solver output.</p>
+          </section>
+        </aside>
+
+        <section id="viewport">
+          <canvas id="gpu-canvas"></canvas>
+        </section>
+      </main>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

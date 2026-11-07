@@ -1,60 +1,280 @@
 import './style.css'
-import heroImg from './assets/hero.png'
-import typescriptLogo from './assets/typescript.svg'
-import viteLogo from './assets/vite.svg'
-import { setupCounter } from './counter.ts'
+import { config } from './config'
+import { initializeGPU } from './gpu/context'
+import { createDrawingPad } from './ui/drawing-pad'
+import { createFlatLens } from './geometry/lens-mesh'
+import { createLensRenderer } from './rendering/lens-renderer'
+import { createCausticDisplay } from './rendering/caustic-display'
+import { createFrameLoop } from './frame-loop'
+import { createSimulation } from './simulation'
+import { createForwardModel } from './optics/forward-model'
+import { createLensOptimizer } from './optimization/lens-optimizer'
+import type { AppState, ForwardModel, ForwardResult, LensOptimizer } from './contracts'
 
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-<section id="center">
-  <div class="hero">
-    <img src="${heroImg}" class="base" width="170" height="179">
-    <img src="${typescriptLogo}" class="framework" alt="TypeScript logo"/>
-    <img src="${viteLogo}" class="vite" alt="Vite logo" />
-  </div>
-  <div>
-    <h1>Get started</h1>
-    <p>Edit <code>src/main.ts</code> and save to test <code>HMR</code></p>
-  </div>
-  <button id="counter" type="button" class="counter"></button>
-</section>
+async function main() {
+  const canvas = document.querySelector('#gpu-canvas')
+  const causticCanvas = document.querySelector('#caustic-canvas')
+  const statusElement = document.querySelector('#status')
+  const causticStatusElement = document.querySelector('#caustic-status')
+  const targetCanvas = document.querySelector('#target-canvas')
+  const clearButton = document.querySelector('#clear-target')
+  const targetStatus = document.querySelector('#target-status')
 
-<div class="ticks"></div>
+  if (
+    !(canvas instanceof HTMLCanvasElement) ||
+    !(causticCanvas instanceof HTMLCanvasElement) ||
+    !(statusElement instanceof HTMLElement) ||
+    !(causticStatusElement instanceof HTMLElement) ||
+    !(targetCanvas instanceof HTMLCanvasElement) ||
+    !(clearButton instanceof HTMLButtonElement) ||
+    !(targetStatus instanceof HTMLElement)
+  ) {
+    throw new Error('Missing application controls.')
+  }
 
-<section id="next-steps">
-  <div id="docs">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#documentation-icon"></use></svg>
-    <h2>Documentation</h2>
-    <p>Your questions, answered</p>
-    <ul>
-      <li>
-        <a href="https://vite.dev/" target="_blank">
-          <img class="logo" src="${viteLogo}" alt="" />
-          Explore Vite
-        </a>
-      </li>
-      <li>
-        <a href="https://www.typescriptlang.org" target="_blank">
-          <img class="button-icon" src="${typescriptLogo}" alt="">
-          Learn more
-        </a>
-      </li>
-    </ul>
-  </div>
-  <div id="social">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#social-icon"></use></svg>
-    <h2>Connect with us</h2>
-    <p>Join the Vite community</p>
-    <ul>
-      <li><a href="https://github.com/vitejs/vite" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#github-icon"></use></svg>GitHub</a></li>
-      <li><a href="https://chat.vite.dev/" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#discord-icon"></use></svg>Discord</a></li>
-      <li><a href="https://x.com/vite_js" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#x-icon"></use></svg>X.com</a></li>
-      <li><a href="https://bsky.app/profile/vite.dev" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#bluesky-icon"></use></svg>Bluesky</a></li>
-    </ul>
-  </div>
-</section>
+  const status = statusElement
+  const causticStatus = causticStatusElement
 
-<div class="ticks"></div>
-<section id="spacer"></section>
-`
+  const { device, context, format } = await initializeGPU(canvas)
+  const events = new AbortController()
+  let disposed = false
+  let hasTarget = false
+  let optimizationDone = false
+  let initialHeightBuffer: GPUBuffer | null = null
+  let depthTexture: GPUTexture | null = null
+  let forward: ForwardModel | null = null
+  let optimizer: LensOptimizer | null = null
+  let lastResult: ForwardResult | null = null
+  let startupEncoder: GPUCommandEncoder | null = null
+  let drawingPad: ReturnType<typeof createDrawingPad> | null = null
+  let lensRenderer: ReturnType<typeof createLensRenderer> | null = null
+  let causticDisplay: ReturnType<typeof createCausticDisplay> | null = null
+  let frameLoop: ReturnType<typeof createFrameLoop> | null = null
 
-setupCounter(document.querySelector<HTMLButtonElement>('#counter')!)
+  function dispose() {
+    if (disposed) return
+    disposed = true
+    events.abort()
+    frameLoop?.destroy()
+    drawingPad?.destroy()
+    startupEncoder = null
+    lastResult = null
+
+    try {
+      lensRenderer?.destroy()
+      causticDisplay?.destroy()
+      optimizer?.destroy()
+      forward?.destroy()
+      depthTexture?.destroy()
+      initialHeightBuffer?.destroy()
+    } finally {
+      device.destroy()
+    }
+  }
+
+  function fail(error: unknown) {
+    if (disposed) return
+    console.error(error)
+    status.textContent = error instanceof Error ? error.message : String(error)
+    causticStatus.textContent = 'Computation stopped.'
+    dispose()
+  }
+
+  device.addEventListener('uncapturederror', (event) => {
+    fail(new Error(`GPU error: ${event.error.message}`))
+  }, { signal: events.signal })
+
+  // Register before awaiting module creation so late results cannot restart the app.
+  void device.lost.then((info) => {
+    if (disposed) return
+    status.textContent = `GPU device lost. Reload the page. ${info.message}`
+    causticStatus.textContent = 'Computation stopped.'
+    dispose()
+  })
+
+  if (import.meta.hot) {
+    import.meta.hot.dispose(dispose)
+  }
+
+  try {
+    // Create design state before the drawing pad publishes its first snapshot.
+    const state: AppState = {
+      target: null,
+      lens: createFlatLens(device, config.lens),
+      optics: { ...config.optics },
+      receiver: { ...config.receiver },
+    }
+
+    // Keep ownership of the initial buffer if the optimizer later swaps it out.
+    initialHeightBuffer = state.lens.heightBuffer
+
+    function updateRunState() {
+      if (!frameLoop || disposed) return
+      const running = optimizer !== null && hasTarget && !optimizationDone
+      frameLoop.setRunning(running)
+
+      if (!forward) {
+        causticStatus.textContent = 'Forward model not implemented.'
+      } else if (!optimizer) {
+        causticStatus.textContent = 'Forward preview. Optimizer not implemented.'
+      } else if (!hasTarget) {
+        causticStatus.textContent = 'Draw a pattern to optimize.'
+      } else {
+        causticStatus.textContent = optimizationDone
+          ? 'Optimization complete.'
+          : 'Optimizing.'
+      }
+    }
+
+    drawingPad = createDrawingPad(targetCanvas, state.receiver, (target) => {
+      // Keep only the latest target; upload it at the next batch boundary.
+      state.target = target
+      optimizationDone = false
+      hasTarget = target.values.some((value) => value > 0)
+      targetStatus.textContent = hasTarget
+        ? 'Target updated'
+        : 'Draw a pattern to begin.'
+      updateRunState()
+      frameLoop?.requestFrame()
+    })
+    clearButton.addEventListener('click', drawingPad.clear, { signal: events.signal })
+
+    const causticContext = causticCanvas.getContext('webgpu')
+    if (!causticContext) {
+      throw new Error('Failed to create caustic canvas context.')
+    }
+    causticCanvas.width = state.receiver.width
+    causticCanvas.height = state.receiver.height
+    causticContext.configure({ device, format, alphaMode: 'opaque' })
+
+    const lensView = createLensRenderer(device, format, state.lens)
+    lensRenderer = lensView
+    const causticView = createCausticDisplay(device, format)
+    causticDisplay = causticView
+    causticView.setExposure(config.rendering.causticExposure)
+    status.textContent = 'Preparing optical modules.'
+
+    // Both modules share this device and the same initial optical configuration.
+    const initial = {
+      lens: { ...state.lens },
+      optics: { ...state.optics },
+      receiver: { ...state.receiver },
+    }
+    forward = await createForwardModel(device, initial)
+    if (disposed) {
+      forward?.destroy()
+      return
+    }
+
+    let simulation: ReturnType<typeof createSimulation> | null = null
+    if (forward) {
+      optimizer = await createLensOptimizer(device, initial, forward)
+      if (disposed) {
+        optimizer?.destroy()
+        return
+      }
+      simulation = createSimulation(state, forward, optimizer ?? undefined)
+
+      // Record the first evaluation now; submit it with the first rendered frame.
+      startupEncoder = device.createCommandEncoder({ label: 'Initial optical frame' })
+      lastResult = simulation.encode(startupEncoder, 0).result
+      await causticView.prepare(lastResult.caustic.kind)
+      if (disposed) return
+      causticView.setImage(lastResult.caustic)
+    }
+
+    const encodeFrame = (steps: number) => {
+      const initialFrame = startupEncoder !== null
+      const encoder = startupEncoder ?? device.createCommandEncoder()
+      startupEncoder = null
+
+      // Deliver the latest target once per batch, including clear and redraw.
+      optimizer?.setTarget(state.target)
+
+      // A pure redraw reuses the last result; running frames evaluate updated heights.
+      if (simulation && !initialFrame && steps > 0) {
+        const batch = simulation.encode(encoder, steps)
+        lastResult = batch.result
+        causticView.setImage(lastResult.caustic)
+        if (batch.done) {
+          optimizationDone = true
+          updateRunState()
+        }
+      }
+
+      const pixelRatio = Math.min(window.devicePixelRatio, config.rendering.maxPixelRatio)
+      const limit = device.limits.maxTextureDimension2D
+      const width = Math.min(
+        limit,
+        Math.max(1, Math.round(canvas.clientWidth * pixelRatio)),
+      )
+      const height = Math.min(
+        limit,
+        Math.max(1, Math.round(canvas.clientHeight * pixelRatio)),
+      )
+
+      if (!depthTexture || canvas.width !== width || canvas.height !== height) {
+        canvas.width = width
+        canvas.height = height
+        depthTexture?.destroy()
+        depthTexture = device.createTexture({
+          label: 'Viewport depth',
+          size: [width, height],
+          format: 'depth24plus',
+          usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        })
+      }
+
+      // Bind the geometry that produced the displayed caustic image.
+      lensView.update(lastResult?.beams.lens ?? state.lens, width / height)
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: context.getCurrentTexture().createView(),
+          clearValue: { r: 0.03, g: 0.18, b: 0.22, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        }],
+        depthStencilAttachment: {
+          view: depthTexture.createView(),
+          depthClearValue: 1,
+          depthLoadOp: 'clear',
+          depthStoreOp: 'discard',
+        },
+      })
+      lensView.draw(pass)
+      pass.end()
+
+      const causticPass = encoder.beginRenderPass({
+        label: 'Caustic preview',
+        colorAttachments: [{
+          view: causticContext.getCurrentTexture().createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        }],
+      })
+      causticView.draw(causticPass)
+      causticPass.end()
+      return encoder.finish()
+    }
+
+    frameLoop = createFrameLoop(device, encodeFrame, {
+      maxStepsPerFrame: config.maxStepsPerFrame,
+      onError: fail,
+    })
+    window.addEventListener('resize', frameLoop.requestFrame, { signal: events.signal })
+    status.textContent = 'WebGPU ready'
+    updateRunState()
+    frameLoop.requestFrame()
+  } catch (error) {
+    fail(error)
+  }
+}
+
+main().catch((error: unknown) => {
+  console.error(error)
+  const status = document.querySelector('#status')
+  if (status) {
+    status.textContent = error instanceof Error ? error.message : String(error)
+  }
+})
