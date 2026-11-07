@@ -1,4 +1,4 @@
-import type { TargetImage } from '../contracts/target'
+import type { TargetImage } from '../contracts'
 
 export function createDrawingPad(
   canvas: HTMLCanvasElement,

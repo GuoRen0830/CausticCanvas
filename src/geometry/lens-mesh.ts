@@ -1,31 +1,55 @@
-import type { LensState } from '../contracts/lens'
+import type { LensState } from '../contracts'
 
-export function buildLensPositions(lens: LensState): Float32Array {
-  const { columns, rows, sizeX, sizeY, heights } = lens
+interface FlatLensOptions {
+  columns: number
+  rows: number
+  sizeX: number
+  sizeY: number
+  thickness: number
+}
 
-  if (heights.length !== columns * rows) {
-    throw new Error('Lens height count does not match the grid.')
+export function createFlatLens(
+  device: GPUDevice,
+  options: FlatLensOptions,
+): LensState {
+  const { columns, rows, sizeX, sizeY, thickness } = options
+
+  // A surface grid needs at least one cell along each axis.
+  if (
+    !Number.isInteger(columns) ||
+    !Number.isInteger(rows) ||
+    columns < 2 ||
+    rows < 2
+  ) {
+    throw new Error('Lens grid requires at least 2 vertices per axis.')
   }
 
-  // Adjacent vertices are evenly spaced in the lens-local XY plane.
-  const spacingX = sizeX / (columns - 1)
-  const spacingY = sizeY / (rows - 1)
-
-  const positions = new Float32Array(columns * rows * 3)
-
-  for (let row = 0; row < rows; row++) {
-    for (let column = 0; column < columns; column++) {
-      const vertex = row * columns + column
-      const offset = vertex * 3
-
-      // Preserve physical scale and use the stored exit-surface height.
-      positions[offset] = -sizeX / 2 + column * spacingX
-      positions[offset + 1] = -sizeY / 2 + row * spacingY
-      positions[offset + 2] = heights[vertex]
-    }
+  // All physical dimensions use meters and must be positive.
+  const dimensions = [sizeX, sizeY, thickness]
+  if (dimensions.some((value) => !Number.isFinite(value) || value <= 0)) {
+    throw new Error('Lens dimensions must be finite and positive.')
   }
 
-  return positions
+  // Keep CPU heights only for the initial upload.
+  const initialHeights = new Float32Array(columns * rows)
+  initialHeights.fill(thickness)
+
+  const heightBuffer = device.createBuffer({
+    label: 'Lens heights',
+    size: initialHeights.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+
+  // Upload the initial heights once.
+  device.queue.writeBuffer(heightBuffer, 0, initialHeights)
+
+  return {
+    columns,
+    rows,
+    sizeX,
+    sizeY,
+    heightBuffer,
+  }
 }
 
 export function buildLensIndices(lens: LensState): Uint32Array {

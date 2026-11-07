@@ -1,70 +1,37 @@
 import { mat4 } from 'wgpu-matrix'
-import type { LensState } from '../contracts/lens'
-import {
-  buildLensPositions,
-  buildLensIndices,
-} from '../geometry/lens-mesh'
+import type { LensState } from '../contracts'
+import { buildLensIndices } from '../geometry/lens-mesh'
 import lensShaderSource from './shaders/lens.wgsl?raw'
 
-// Each vertex contains three consecutive float32 position components.
-export const lensVertexLayout: GPUVertexBufferLayout = {
-  arrayStride: 12,
-  stepMode: 'vertex',
-  attributes: [
-    {
-      shaderLocation: 0,
-      offset: 0,
-      format: 'float32x3',
-    },
-  ],
+export interface LensRenderer {
+  update(lens: LensState, aspect: number): void
+  draw(pass: GPURenderPassEncoder): void
+  destroy(): void
 }
 
-export interface LensBuffers {
-  vertexBuffer: GPUBuffer
-  indexBuffer: GPUBuffer
-  indexCount: number
-}
-
-export function createLensBuffers(
-  device: GPUDevice,
-  lens: LensState,
-): LensBuffers {
-  const positions = buildLensPositions(lens)
+function createLensIndexBuffer(device: GPUDevice, lens: LensState) {
   const indices = buildLensIndices(lens)
 
-  // Vertex positions can be uploaded again when the lens changes.
-  const vertexBuffer = device.createBuffer({
-    label: 'Lens vertices',
-    size: positions.byteLength,
-    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-  })
-
-  // Mesh connectivity stays fixed while only heights change.
-  const indexBuffer = device.createBuffer({
+  // Mesh connectivity stays fixed while GPU heights change.
+  const buffer = device.createBuffer({
     label: 'Lens indices',
     size: indices.byteLength,
     usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
   })
 
-  // Upload the initial CPU mesh into GPU buffers.
-  device.queue.writeBuffer(vertexBuffer, 0, positions)
-  device.queue.writeBuffer(indexBuffer, 0, indices)
+  device.queue.writeBuffer(buffer, 0, indices)
 
-  return {
-    vertexBuffer,
-    indexBuffer,
-    indexCount: indices.length,
-  }
+  return { buffer, indexCount: indices.length }
 }
 
-export function createLensTransforms(
+function createLensUniforms(
   device: GPUDevice,
   lens: LensState,
 ) {
-  // One mat4x4<f32> occupies 64 bytes.
+  // Store the MVP matrix and grid parameters in one uniform block.
   const buffer = device.createBuffer({
-    label: 'Lens transforms',
-    size: 64,
+    label: 'Lens uniforms',
+    size: 80,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
 
@@ -81,7 +48,15 @@ export function createLensTransforms(
   )
 
   const modelView = mat4.multiply(view, model)
-  const mvp = new Float32Array(16)
+  const data = new ArrayBuffer(80)
+  const mvp = new Float32Array(data, 0, 16)
+  const parameters = new DataView(data)
+
+  // Match the WGSL field types and byte offsets.
+  parameters.setUint32(64, lens.columns, true)
+  parameters.setUint32(68, lens.rows, true)
+  parameters.setFloat32(72, lens.sizeX, true)
+  parameters.setFloat32(76, lens.sizeY, true)
 
   const update = (aspect: number) => {
     const projection = mat4.perspective(
@@ -93,29 +68,27 @@ export function createLensTransforms(
 
     // Column vectors apply model, view, then projection.
     mat4.multiply(projection, modelView, mvp)
-    device.queue.writeBuffer(buffer, 0, mvp)
+    device.queue.writeBuffer(buffer, 0, data)
   }
 
   return { buffer, update }
 }
 
-export function createLensPipeline(
+function createLensPipeline(
   device: GPUDevice,
   format: GPUTextureFormat,
-  transformBuffer: GPUBuffer,
 ) {
   const module = device.createShaderModule({
     label: 'Lens shader',
     code: lensShaderSource,
   })
 
-  const pipeline = device.createRenderPipeline({
+  return device.createRenderPipeline({
     label: 'Lens pipeline',
     layout: 'auto',
     vertex: {
       module,
       entryPoint: 'vertexMain',
-      buffers: [lensVertexLayout],
     },
     fragment: {
       module,
@@ -133,18 +106,75 @@ export function createLensPipeline(
       depthCompare: 'less',
     },
   })
+}
 
-  // Connect group 0, binding 0 to the MVP uniform buffer.
-  const bindGroup = device.createBindGroup({
-    label: 'Lens transform bindings',
-    layout: pipeline.getBindGroupLayout(0),
-    entries: [
-      {
-        binding: 0,
-        resource: { buffer: transformBuffer },
-      },
-    ],
-  })
+export function createLensRenderer(
+  device: GPUDevice,
+  format: GPUTextureFormat,
+  initialLens: LensState,
+): LensRenderer {
+  const { columns, rows, sizeX, sizeY } = initialLens
+  const indices = createLensIndexBuffer(device, initialLens)
+  const uniforms = createLensUniforms(device, initialLens)
+  const pipeline = createLensPipeline(device, format)
+  const layout = pipeline.getBindGroupLayout(0)
+  const bindings = new WeakMap<GPUBuffer, GPUBindGroup>()
 
-  return { pipeline, bindGroup }
+  const bindingsFor = (heightBuffer: GPUBuffer) => {
+    let group = bindings.get(heightBuffer)
+
+    if (!group) {
+      // Reuse bindings when the optimizer alternates height buffers.
+      group = device.createBindGroup({
+        label: 'Lens bindings',
+        layout,
+        entries: [
+          {
+            binding: 0,
+            resource: { buffer: uniforms.buffer },
+          },
+          {
+            binding: 1,
+            resource: { buffer: heightBuffer, size: columns * rows * 4 },
+          },
+        ],
+      })
+      bindings.set(heightBuffer, group)
+    }
+
+    return group
+  }
+
+  let bindGroup = bindingsFor(initialLens.heightBuffer)
+
+  return {
+    update(lens, aspect) {
+      if (
+        lens.columns !== columns ||
+        lens.rows !== rows ||
+        lens.sizeX !== sizeX ||
+        lens.sizeY !== sizeY
+      ) {
+        throw new Error('Lens grid or aperture changes require a new renderer.')
+      }
+
+      // Bind the current GPU resource without reading back its contents.
+      bindGroup = bindingsFor(lens.heightBuffer)
+      uniforms.update(aspect)
+    },
+
+    draw(pass) {
+      // Vertex positions come from the shared height buffer.
+      pass.setPipeline(pipeline)
+      pass.setBindGroup(0, bindGroup)
+      pass.setIndexBuffer(indices.buffer, 'uint32')
+      pass.drawIndexed(indices.indexCount)
+    },
+
+    destroy() {
+      // Shared heights remain owned by the producer.
+      indices.buffer.destroy()
+      uniforms.buffer.destroy()
+    },
+  }
 }

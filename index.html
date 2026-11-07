@@ -22,6 +22,15 @@
         
           <button id="clear-target" type="button">Clear</button>
           <p id="target-status">Draw a pattern to begin.</p>
+
+          <section id="caustic-panel">
+            <h2>Caustic result</h2>
+            <canvas
+              id="caustic-canvas"
+              aria-label="Receiver irradiance preview"
+            ></canvas>
+            <p id="caustic-status">Waiting for solver output.</p>
+          </section>
         </aside>
       
         <section id="viewport">
