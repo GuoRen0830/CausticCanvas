@@ -48,6 +48,11 @@ async function main() {
       sizeY: 0.2,
       thickness: 0.01,
     }),
+    optics: {
+      lensIOR: 1.5,
+      outsideIOR: 1,
+      incidentIrradiance: 1,
+    },
     receiver: {
       z: 0.5,
       sizeX: 0.4,
