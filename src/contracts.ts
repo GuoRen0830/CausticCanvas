@@ -3,16 +3,20 @@ export interface LensState {
   columns: number
   rows: number
 
-  // Aperture dimensions in meters.
+  // Centered XY aperture in meters; uniformly spaced vertices.
+  // Columns run from -sizeX/2 to +sizeX/2; rows from -sizeY/2 to +sizeY/2.
   sizeX: number
   sizeY: number
 
   // Exit-surface z in meters; the entry plane is z = 0.
   // Row-major f32 values, starting at byte offset 0.
+  // All shared height buffers require STORAGE | COPY_SRC | COPY_DST.
   heightBuffer: GPUBuffer
 }
 
 export interface OpticalConfig {
+  // Ideal lossless refraction; omit absorption and Fresnel reflection.
+  // The optimizer must keep the surface within the valid refraction domain.
   // Refractive indices of the lens and surrounding medium.
   lensIOR: number
   outsideIOR: number
@@ -32,6 +36,7 @@ export interface TriangleBeamField {
   // STORAGE array<vec4<f32>>, byte offset 0, 16-byte stride.
   // xyz: unit propagation direction in lens-local coordinates.
   // w: total transmitted radiant flux in W, finite and nonnegative.
+  // For valid lossless beams: incidentIrradiance * triangle XY area.
   // Inactive beams use (0, 0, 1, 0); consumers skip zero flux.
   // Consumers borrow both buffers; resource owners manage their lifetime.
   readonly buffer: GPUBuffer
@@ -42,7 +47,8 @@ export interface TargetImage {
   height: number
   version: number
 
-  // Row-major weights in [0, 1], with row 0 at the bottom.
+  // Linear shape weights in [0, 1]; no gamma decoding.
+  // Row-major, with row 0 at the bottom; not absolute irradiance.
   values: Float32Array
 }
 
@@ -61,7 +67,7 @@ export interface ReceiverPlane {
 }
 
 export type CausticImage = {
-  // Linear irradiance; no exposure or tone mapping.
+  // Linear irradiance in W/m^2; no exposure or tone mapping.
   readonly width: number
   readonly height: number
 
@@ -106,6 +112,7 @@ export interface ForwardResult {
 }
 
 export interface ForwardModel {
+  // Keep the caustic image kind stable for this model instance.
   // Pipelines must be ready; all resources must use the encoder's device.
   // Call between passes; record a full evaluation and close all opened passes.
   // Never finish or submit the encoder; the caller controls submission.
@@ -114,6 +121,45 @@ export interface ForwardModel {
   encode(encoder: GPUCommandEncoder, input: ForwardInput): ForwardResult
 
   // Release owned resources only; never destroy the borrowed lens heights.
+  destroy(): void
+}
+
+export interface OptimizationStepResult {
+  readonly lens: LensState
+
+  // Stop scheduling this target after submitting the current batch.
+  // A CPU-known decision, not a GPU-completion or readback signal.
+  readonly done: boolean
+}
+
+export interface LensOptimizer {
+  // Call before encoding a batch, after submitting any previous batch.
+  // Upload new target versions once; never modify the caller's values.
+  // A new version starts a new run; unchanged versions preserve progress.
+  // Normalize weights to P = incidentIrradiance * lens.sizeX * lens.sizeY.
+  // For pixel area dA, target E[i] = P * weight[i] / (dA * sum(weights)).
+  // Do not normalize by the current received power or display exposure.
+  // Null or all-zero targets disable updates without resetting the lens.
+  setTarget(target: Readonly<TargetImage> | null): void
+
+  // Encode one update using the forward model captured during creation.
+  // Nonempty target dimensions must match input.receiver.
+  // Preserve grid and aperture metadata; height storage may be reused.
+  // Consume old forward and gradient data before overwriting source heights.
+  // Missing or empty targets return { lens: input.lens, done: true }.
+  // A completed run stays done until setTarget receives a new version.
+  // Report done using a step limit or already available convergence information;
+  // never wait for GPU results here. The last call may still update the lens.
+  // Pipelines must be ready and all resources must use the same device.
+  // Call between passes; close all opened passes, never finish or submit.
+  // Multiple steps may share an encoder; preserve each step's parameters.
+  // Return without waiting for GPU execution or reading data back.
+  encodeStep(
+    encoder: GPUCommandEncoder,
+    input: ForwardInput,
+  ): OptimizationStepResult
+
+  // Release owned resources only; keep the shared forward model and borrowed heights.
   destroy(): void
 }
 

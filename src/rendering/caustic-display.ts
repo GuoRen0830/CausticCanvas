@@ -139,7 +139,8 @@ function createCausticBindGroup(
 }
 
 export interface CausticDisplay {
-  setImage(image: CausticImage): Promise<void>
+  prepare(kind: CausticImage['kind']): Promise<void>
+  setImage(image: CausticImage): void
   setExposure(exposure: number): void
   draw(pass: GPURenderPassEncoder): void
   destroy(): void
@@ -151,10 +152,14 @@ export function createCausticDisplay(
 ): CausticDisplay {
   const uniforms = createDisplayUniforms(device)
 
-  // Create each pipeline variant only when first needed.
-  const pipelines = new Map<
-    CausticImage['kind'],
-    ReturnType<typeof createCausticPipeline>
+  type Pipeline = Awaited<ReturnType<typeof createCausticPipeline>>
+  const pipelines = new Map<CausticImage['kind'], Pipeline>()
+  const preparing = new Map<CausticImage['kind'], Promise<void>>()
+
+  // Reuse bindings when the producer alternates GPU resources.
+  let bindings = new WeakMap<
+    GPUBuffer | GPUTextureView,
+    { width: number; height: number; bindGroup: GPUBindGroup }
   >()
 
   let active: {
@@ -164,36 +169,71 @@ export function createCausticDisplay(
   } | null = null
 
   let exposure = 1
-  let requestId = 0
   let disposed = false
 
   return {
-    async setImage(image) {
-      if (disposed) return
+    async prepare(kind) {
+      if (disposed || pipelines.has(kind)) return
 
-      const currentRequest = ++requestId
-      let pending = pipelines.get(image.kind)
-
+      // Compile outside the frame loop and share concurrent preparation requests.
+      let pending = preparing.get(kind)
       if (!pending) {
-        pending = createCausticPipeline(device, format, image.kind)
-        pipelines.set(image.kind, pending)
+        pending = createCausticPipeline(device, format, kind).then((pipeline) => {
+          if (!disposed) pipelines.set(kind, pipeline)
+        })
+        preparing.set(kind, pending)
       }
 
-      const { pipeline, bindGroupLayout } = await pending
+      try {
+        await pending
+      } finally {
+        if (preparing.get(kind) === pending) preparing.delete(kind)
+      }
+    },
 
-      // Ignore results superseded while pipeline creation was pending.
-      if (disposed || currentRequest !== requestId) return
+    setImage(image) {
+      if (disposed) return
 
-      uniforms.update(image.width, image.height, exposure)
+      const ready = pipelines.get(image.kind)
+      if (!ready) {
+        throw new Error('Prepare the caustic pipeline before binding an image.')
+      }
 
-      const bindGroup = createCausticBindGroup(
-        device,
-        bindGroupLayout,
-        uniforms.buffer,
-        image,
-      )
+      if (
+        !active ||
+        active.image.width !== image.width ||
+        active.image.height !== image.height
+      ) {
+        uniforms.update(image.width, image.height, exposure)
+      }
 
-      active = { image, pipeline, bindGroup }
+      const resource = image.kind === 'buffer' ? image.buffer : image.view
+      let binding = bindings.get(resource)
+
+      if (
+        !binding ||
+        binding.width !== image.width ||
+        binding.height !== image.height
+      ) {
+        binding = {
+          width: image.width,
+          height: image.height,
+          bindGroup: createCausticBindGroup(
+            device,
+            ready.bindGroupLayout,
+            uniforms.buffer,
+            image,
+          ),
+        }
+        bindings.set(resource, binding)
+      }
+
+      // Snapshot image metadata without copying the shared GPU contents.
+      active = {
+        image: { ...image },
+        pipeline: ready.pipeline,
+        bindGroup: binding.bindGroup,
+      }
     },
 
     setExposure(value) {
@@ -202,6 +242,7 @@ export function createCausticDisplay(
       if (!Number.isFinite(value) || value < 0) {
         throw new Error('Exposure must be finite and non-negative.')
       }
+      if (value === exposure) return
 
       if (active) {
         uniforms.update(active.image.width, active.image.height, value)
@@ -222,6 +263,8 @@ export function createCausticDisplay(
       disposed = true
       active = null
       pipelines.clear()
+      preparing.clear()
+      bindings = new WeakMap()
 
       // The producer owns the image resource.
       uniforms.buffer.destroy()

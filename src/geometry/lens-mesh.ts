@@ -37,7 +37,7 @@ export function createFlatLens(
   const heightBuffer = device.createBuffer({
     label: 'Lens heights',
     size: initialHeights.byteLength,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
   })
 
   // Upload the initial heights once.

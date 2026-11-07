@@ -2,17 +2,27 @@ import type { TargetImage } from '../contracts'
 
 export function createDrawingPad(
   canvas: HTMLCanvasElement,
+  size: Pick<TargetImage, 'width' | 'height'>,
   onChange: (target: TargetImage) => void,
 ) {
+  const { width, height } = size
+  if (
+    !Number.isInteger(width) || !Number.isInteger(height) ||
+    width < 1 || height < 1
+  ) {
+    throw new Error('Drawing dimensions must be positive integers.')
+  }
+
   const context = canvas.getContext('2d', { willReadFrequently: true })
   if (!context) throw new Error('Failed to create drawing context.')
 
   // Keep target resolution independent of CSS size and display density.
-  canvas.width = 256
-  canvas.height = 256
+  canvas.width = width
+  canvas.height = height
   context.strokeStyle = '#fff'
   context.fillStyle = '#fff'
-  context.lineWidth = 12
+  // Keep brush size proportional when the image resolution changes.
+  context.lineWidth = Math.min(width, height) * 0.05
   context.lineCap = 'round'
   context.lineJoin = 'round'
 
