@@ -13,8 +13,20 @@
         <p id="status">Initializing WebGPU…</p>
       </header>
 
-      <main id="viewport">
-        <canvas id="gpu-canvas"></canvas>
+      <main id="workspace">
+        <aside id="design-panel">
+          <h2>Design the light</h2>
+          <p>Draw a pattern with the white brush.</p>
+        
+          <canvas id="target-canvas" aria-label="Light pattern drawing pad"></canvas>
+        
+          <button id="clear-target" type="button">Clear</button>
+          <p id="target-status">Draw a pattern to begin.</p>
+        </aside>
+      
+        <section id="viewport">
+          <canvas id="gpu-canvas"></canvas>
+        </section>
       </main>
     </div>
 
