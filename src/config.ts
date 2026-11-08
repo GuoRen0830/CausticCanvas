@@ -3,8 +3,8 @@ import type { OpticalConfig, ReceiverPlane } from './contracts'
 // Startup settings. Reload to apply grid, image, or optical changes.
 export const config = {
   lens: {
-    columns: 33,
-    rows: 33,
+    columns: 1025,
+    rows: 1025,
     sizeX: 0.2,
     sizeY: 0.2,
     thickness: 0.01,
