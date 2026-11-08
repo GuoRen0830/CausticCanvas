@@ -120,7 +120,15 @@ export interface ForwardModel {
   // Multiple calls may share an encoder; preserve each call's parameter values.
   encode(encoder: GPUCommandEncoder, input: ForwardInput): ForwardResult
 
-  // Overwrite one f32 gradient per height using the latest matching forward input.
+  // A/B gradient protocol (see 03 and the A-to-B handoff).
+  // Record the vector-Jacobian product of the latest encode for this input:
+  // heightGradient[v] = sum_j pixelGradient[j] * dE[j] / dh[v].
+  // pixelGradient: borrowed STORAGE row-major f32 dL/dE per receiver pixel,
+  // row 0 at the bottom, in loss units per (W/m^2).
+  // heightGradient: borrowed STORAGE row-major f32 dL/dh per lens vertex,
+  // in loss units per meter. Overwrite every entry; never accumulate.
+  // Pass the exact result of that encode, before its outputs or heights are reused.
+  // The same recording rules as encode apply: no finish, submit, or readback.
   encodeBackward?(
     encoder: GPUCommandEncoder,
     input: ForwardInput,

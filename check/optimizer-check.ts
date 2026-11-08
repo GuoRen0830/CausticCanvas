@@ -1,4 +1,4 @@
-import { createLensOptimizer, normalizeTarget } from '../src/optimization/lens-optimizer'
+import { createLensOptimizer, normalizeTarget, type OptimizerSettings } from '../src/optimization/lens-optimizer'
 import { config } from '../src/config'
 import type { ForwardInput, ForwardModel, ForwardResult, LensState, TargetImage } from '../src/contracts'
 
@@ -95,7 +95,7 @@ function heightsBuffer(device: GPUDevice, values: Float32Array) {
   return b
 }
 
-function regLoss(h: Float64Array, cols: number, rows: number, dx: number, dy: number, s: typeof config.optimizer) {
+function regLoss(h: Float64Array, cols: number, rows: number, dx: number, dy: number, s: OptimizerSettings) {
   const N = cols * rows, F = 2 * (cols - 1) * (rows - 1), ms = 0.5 * (dx + dy)
   let ls = 0
   for (let r = 1; r < rows - 1; r++) for (let c = 1; c < cols - 1; c++) {
@@ -120,7 +120,8 @@ async function main() {
   const cols = 9, rows = 9
   const receiver = { z: 0.5, sizeX: 0.4, sizeY: 0.4, width: 64, height: 64 }
   const optics = { ...config.optics }
-  const settings = { ...config.optimizer, maxIterations: 400, lossLogInterval: 50 }
+  // Disable loss filtering so the pixel gradient has a closed form; loss-filter-check covers the filter.
+  const settings: OptimizerSettings = { ...config.optimizer, maxIterations: 400, lossLogInterval: 50, lossBlurSigma: 0 }
   const dx = 0.2 / (cols - 1), dy = 0.2 / (rows - 1)
   const lensOf = (buf: GPUBuffer): LensState => ({ columns: cols, rows, sizeX: 0.2, sizeY: 0.2, heightBuffer: buf })
 

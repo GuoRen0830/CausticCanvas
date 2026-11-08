@@ -11,7 +11,7 @@ import type {
 } from '../contracts'
 import shaderSource from './shaders/optimizer.wgsl?raw'
 
-type OptimizerSettings = { [K in keyof typeof config.optimizer]: number }
+export type OptimizerSettings = { [K in keyof typeof config.optimizer]: number }
 
 const LOSS_WORKGROUP = 256
 const VERTEX_WORKGROUP = 64
