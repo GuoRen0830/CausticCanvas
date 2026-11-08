@@ -135,7 +135,7 @@ The A-only ZIP excludes those B/configuration files. If pushing the entire local
 5. Open the main page, draw a small centered circle, and check that optimization runs and a consistently defined loss decreases over sufficient iterations. Individual Adam steps need not be monotonic.
 6. Add a stroke and check that the current lens is reused. Clear the target and check that updates stop. Verify finite heights and a preview matching the final heights.
 
-The latest handoff review reran the standalone and extended GPU checks successfully and verified the A-only archive against the local source. The build recheck stalled without output and was stopped; it is not recorded as a successful build. B should complete the build check after merging.
+The handoff review reran the standalone and extended GPU checks successfully and verified the A-only archive against the local source. A subsequent clean checkout passed `npm ci`, `npm run build` (TypeScript checking and Vite production build), and `git diff --check` before handoff. B should rerun the checks after merging into their branch.
 
 ## Known limits
 
