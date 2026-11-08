@@ -11,7 +11,7 @@ import type {
 } from '../contracts'
 import shaderSource from './shaders/optimizer.wgsl?raw'
 
-type OptimizerSettings = typeof config.optimizer
+type OptimizerSettings = { [K in keyof typeof config.optimizer]: number }
 
 const LOSS_WORKGROUP = 256
 const VERTEX_WORKGROUP = 64
@@ -58,7 +58,7 @@ function validateSettings(settings: OptimizerSettings) {
     settings.maxSurfaceSlope,
     settings.minHeight,
   ]
-  const nonnegative = [settings.smoothnessWeight, settings.slopeWeight]
+  const nonnegative = [settings.smoothnessWeight, settings.slopeWeight, settings.lossBlurSigma]
   if (
     positive.some((value) => !Number.isFinite(value) || value <= 0) ||
     nonnegative.some((value) => !Number.isFinite(value) || value < 0) ||
@@ -114,6 +114,8 @@ function writeParams(
     1 / faceCount,
   ]
   floats.forEach((value, i) => view.setFloat32(24 + 4 * i, value, true))
+  view.setUint32(72, settings.maxIterations, true)
+  view.setFloat32(76, settings.lossBlurSigma, true)
   return data
 }
 
@@ -165,6 +167,8 @@ export async function createLensOptimizer(
     const stepState = createBuffer('Optimizer step state', 16, storage)
     const targetBuffer = createBuffer('Target irradiance', pixelCount * 4, storage)
     const pixelGradient = createBuffer('Pixel loss gradient', pixelCount * 4, storage)
+    const filterA = createBuffer('Loss filter A', pixelCount * 4, storage)
+    const filterB = createBuffer('Loss filter B', pixelCount * 4, storage)
     const lossPartials = createBuffer('Loss partial sums', lossGroups * 4, storage)
     const lossStaging = createBuffer(
       'Loss readback',
@@ -187,6 +191,9 @@ export async function createLensOptimizer(
         storageEntry(1, 'read-only-storage'),
         storageEntry(2, 'storage'),
         storageEntry(3, 'storage'),
+        storageEntry(8, 'storage'),
+        storageEntry(9, 'storage'),
+        storageEntry(10, 'storage'),
       ],
     })
     const causticLayouts = {
@@ -225,6 +232,10 @@ export async function createLensOptimizer(
     const [
       lossFromBuffer,
       lossFromTexture,
+      filterResidualX,
+      filterResidualY,
+      filterGradientY,
+      filterGradientX,
       computeCurvature,
       addRegularization,
       adamUpdate,
@@ -232,6 +243,10 @@ export async function createLensOptimizer(
     ] = await Promise.all([
       pipeline('lossFromBuffer', [lossLayout, causticLayouts.buffer]),
       pipeline('lossFromTexture', [lossLayout, causticLayouts.texture]),
+      pipeline('filterResidualX', [lossLayout]),
+      pipeline('filterResidualY', [lossLayout]),
+      pipeline('filterGradientY', [lossLayout]),
+      pipeline('filterGradientX', [lossLayout]),
       pipeline('computeCurvature', [updateLayout]),
       pipeline('addRegularization', [updateLayout]),
       pipeline('adamUpdate', [updateLayout]),
@@ -246,6 +261,9 @@ export async function createLensOptimizer(
         { binding: 1, resource: { buffer: targetBuffer } },
         { binding: 2, resource: { buffer: pixelGradient } },
         { binding: 3, resource: { buffer: lossPartials } },
+        { binding: 8, resource: { buffer: stepState } },
+        { binding: 9, resource: { buffer: filterA } },
+        { binding: 10, resource: { buffer: filterB } },
       ],
     })
     const updateBindings = device.createBindGroup({
@@ -364,6 +382,14 @@ export async function createLensOptimizer(
         lossPass.setBindGroup(1, causticBindingsFor(result.caustic))
         lossPass.dispatchWorkgroups(lossGroups)
         lossPass.end()
+
+        const filterPass = encoder.beginComputePass({ label: 'Optimizer loss filter' })
+        filterPass.setBindGroup(0, lossBindings)
+        for (const filter of [filterResidualX, filterResidualY, filterGradientY, filterGradientX]) {
+          filterPass.setPipeline(filter)
+          filterPass.dispatchWorkgroups(lossGroups)
+        }
+        filterPass.end()
 
         // Optical vector-Jacobian product overwrites heightGradient.
         forward.encodeBackward!(encoder, stepInput, result, pixelGradient, heightGradient)

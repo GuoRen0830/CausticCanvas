@@ -23,15 +23,17 @@ export const config = {
     height: 256,
   } satisfies ReceiverPlane,
   optimizer: {
-    // Adam step size in meters of height per iteration.
+    // Initial Adam step size in meters; decreases during each run.
     learningRate: 5e-5,
+    // Initial loss-filter width in receiver pixels; anneals to zero.
+    lossBlurSigma: 16,
     beta1: 0.9,
     beta2: 0.999,
     epsilon: 1e-8,
     // Iterations per target before reporting done.
     maxIterations: 3000,
     // Weight of the mean squared discrete Laplacian (dimensionless curvature).
-    smoothnessWeight: 0.1,
+    smoothnessWeight: 10,
     // Penalize face slopes above this tangent; total internal reflection
     // starts near tan(asin(outsideIOR / lensIOR)) = 0.894 for 1.5 / 1.
     maxSurfaceSlope: 0.7,

@@ -20,6 +20,8 @@ struct Params {
   minHeight: f32,
   invVertexCount: f32,
   invFaceCount: f32,
+  maxIterations: u32,
+  lossBlurSigma: f32,
 }
 
 struct StepState {
@@ -44,15 +46,17 @@ struct StepState {
 @group(0) @binding(6) var<storage, read_write> curvature: array<f32>;
 @group(0) @binding(7) var<storage, read_write> moments: array<vec2<f32>>;
 @group(0) @binding(8) var<storage, read_write> state: StepState;
+@group(0) @binding(9) var<storage, read_write> filterA: array<f32>;
+@group(0) @binding(10) var<storage, read_write> filterB: array<f32>;
 
 const LOSS_WORKGROUP = 256u;
 var<workgroup> partialSums: array<f32, LOSS_WORKGROUP>;
 
-// Write dL/dE for one pixel and return its loss contribution.
+// Store the residual; log the unfiltered loss for comparable diagnostics.
 fn pixelLoss(index: u32, irradiance: f32) -> f32 {
   let residual = irradiance - targetIrradiance[index];
   let scale = params.invMeanIrradianceSq * params.invPixelCount;
-  pixelGradient[index] = 2.0 * residual * scale;
+  pixelGradient[index] = residual;
   return residual * residual * scale;
 }
 
@@ -95,6 +99,59 @@ fn lossFromTexture(
     loss = pixelLoss(id.x, textureLoad(causticTexture, pixel, 0).r);
   }
   reduceLoss(localIndex, group.x, loss);
+}
+
+// Symmetric, zero-padded Gaussian filtering: d||K(E-T)||²/dE = 2 K^T K(E-T).
+fn filtered(index: u32, axis: u32, source: u32) -> f32 {
+  let progress = f32(state.step) / max(1.0, 0.8 * f32(params.maxIterations));
+  let sigma = params.lossBlurSigma * max(0.0, 1.0 - progress);
+  let radius = i32(ceil(3.0 * sigma));
+  let pixel = vec2<i32>(i32(index % params.imageSize.x), i32(index / params.imageSize.x));
+  var sum = 0.0;
+  var weightSum = 0.0;
+  for (var offset = -radius; offset <= radius; offset++) {
+    let weight = exp(-0.5 * f32(offset * offset) / max(sigma * sigma, 1e-8));
+    weightSum += weight;
+    var q = pixel;
+    q[axis] += offset;
+    if (all(q >= vec2<i32>(0)) && all(q < vec2<i32>(params.imageSize))) {
+      let i = u32(q.y) * params.imageSize.x + u32(q.x);
+      var value = 0.0;
+      if (source == 0u) { value = pixelGradient[i]; }
+      if (source == 1u) { value = filterA[i]; }
+      if (source == 2u) { value = filterB[i]; }
+      sum += weight * value;
+    }
+  }
+  return sum / weightSum;
+}
+
+@compute @workgroup_size(256)
+fn filterResidualX(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x < params.imageSize.x * params.imageSize.y) {
+    filterA[id.x] = filtered(id.x, 0u, 0u);
+  }
+}
+
+@compute @workgroup_size(256)
+fn filterResidualY(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x < params.imageSize.x * params.imageSize.y) {
+    filterB[id.x] = filtered(id.x, 1u, 1u);
+  }
+}
+
+@compute @workgroup_size(256)
+fn filterGradientY(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x < params.imageSize.x * params.imageSize.y) {
+    filterA[id.x] = filtered(id.x, 1u, 2u);
+  }
+}
+
+@compute @workgroup_size(256)
+fn filterGradientX(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x < params.imageSize.x * params.imageSize.y) {
+    pixelGradient[id.x] = 2.0 * params.invMeanIrradianceSq * params.invPixelCount * filtered(id.x, 0u, 1u);
+  }
 }
 
 fn vertexIndex(column: u32, row: u32) -> u32 {
@@ -227,7 +284,9 @@ fn adamUpdate(@builtin(global_invocation_id) id: vec3<u32>) {
   moments[id.x] = vec2<f32>(m, v);
   let mHat = m / (1.0 - pow(params.beta1, t));
   let vHat = v / (1.0 - pow(params.beta2, t));
-  let updated = heights[id.x] - params.learningRate * mHat / (sqrt(vHat) + params.epsilon);
+  let remaining = max(0.0, 1.0 - t / f32(params.maxIterations));
+  let rate = params.learningRate * (0.05 + 0.95 * remaining * remaining);
+  let updated = heights[id.x] - rate * mHat / (sqrt(vHat) + params.epsilon);
   heights[id.x] = max(updated, params.minHeight);
 }
 
