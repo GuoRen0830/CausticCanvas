@@ -4,6 +4,7 @@ import { initializeGPU } from './gpu/context'
 import { createDrawingPad } from './ui/drawing-pad'
 import { createFlatLens } from './geometry/lens-mesh'
 import { createLensRenderer } from './rendering/lens-renderer'
+import { createOrbitCamera } from './rendering/orbit-camera'
 import { createCausticDisplay } from './rendering/caustic-display'
 import { createFrameLoop } from './frame-loop'
 import { createSimulation } from './simulation'
@@ -50,12 +51,14 @@ async function main() {
   let lensRenderer: ReturnType<typeof createLensRenderer> | null = null
   let causticDisplay: ReturnType<typeof createCausticDisplay> | null = null
   let frameLoop: ReturnType<typeof createFrameLoop> | null = null
+  let camera: ReturnType<typeof createOrbitCamera> | null = null
 
   function dispose() {
     if (disposed) return
     disposed = true
     events.abort()
     frameLoop?.destroy()
+    camera?.destroy()
     drawingPad?.destroy()
     startupEncoder = null
     lastResult = null
@@ -147,6 +150,12 @@ async function main() {
     causticCanvas.height = state.receiver.height
     causticContext.configure({ device, format, alphaMode: 'opaque' })
 
+    const orbitCamera = createOrbitCamera(canvas, {
+      target: [0, 0, config.lens.thickness],
+      span: Math.max(state.lens.sizeX, state.lens.sizeY),
+    }, () => frameLoop?.requestFrame())
+    camera = orbitCamera
+
     const lensView = createLensRenderer(device, format, state.lens)
     lensRenderer = lensView
     const causticView = createCausticDisplay(device, format)
@@ -226,7 +235,8 @@ async function main() {
       }
 
       // Bind the geometry that produced the displayed caustic image.
-      lensView.update(lastResult?.beams.lens ?? state.lens, width / height)
+      const viewProjection = orbitCamera.update(width / height)
+      lensView.update(lastResult?.beams.lens ?? state.lens, viewProjection)
       const pass = encoder.beginRenderPass({
         colorAttachments: [{
           view: context.getCurrentTexture().createView(),

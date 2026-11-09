@@ -1,10 +1,10 @@
-import { mat4 } from 'wgpu-matrix'
+import type { Mat4 } from 'wgpu-matrix'
 import type { LensState } from '../contracts'
 import { buildLensIndices } from '../geometry/lens-mesh'
 import lensShaderSource from './shaders/lens.wgsl?raw'
 
 export interface LensRenderer {
-  update(lens: LensState, aspect: number): void
+  update(lens: LensState, viewProjection: Mat4): void
   draw(pass: GPURenderPassEncoder): void
   destroy(): void
 }
@@ -35,19 +35,6 @@ function createLensUniforms(
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
 
-  const span = Math.max(lens.sizeX, lens.sizeY)
-
-  // Keep lens-local coordinates unchanged in the preview world.
-  const model = mat4.identity()
-
-  // View the exit surface from an oblique angle.
-  const view = mat4.lookAt(
-    [span * 1.3, span * 0.9, span * 1.8],
-    [0, 0, 0],
-    [0, 1, 0],
-  )
-
-  const modelView = mat4.multiply(view, model)
   const data = new ArrayBuffer(80)
   const mvp = new Float32Array(data, 0, 16)
   const parameters = new DataView(data)
@@ -58,16 +45,9 @@ function createLensUniforms(
   parameters.setFloat32(72, lens.sizeX, true)
   parameters.setFloat32(76, lens.sizeY, true)
 
-  const update = (aspect: number) => {
-    const projection = mat4.perspective(
-      Math.PI / 4,
-      aspect,
-      span * 0.01,
-      span * 20,
-    )
-
-    // Column vectors apply model, view, then projection.
-    mat4.multiply(projection, modelView, mvp)
+  const update = (viewProjection: Mat4) => {
+    // Lens-local coordinates are world coordinates, so the model matrix is identity.
+    mvp.set(viewProjection)
     device.queue.writeBuffer(buffer, 0, data)
   }
 
@@ -98,7 +78,8 @@ function createLensPipeline(
     primitive: {
       topology: 'triangle-list',
       frontFace: 'ccw',
-      cullMode: 'back',
+      // The preview is an open exit surface; allow inspection from either side.
+      cullMode: 'none',
     },
     depthStencil: {
       format: 'depth24plus',
@@ -148,7 +129,7 @@ export function createLensRenderer(
   let bindGroup = bindingsFor(initialLens.heightBuffer)
 
   return {
-    update(lens, aspect) {
+    update(lens, viewProjection) {
       if (
         lens.columns !== columns ||
         lens.rows !== rows ||
@@ -160,7 +141,7 @@ export function createLensRenderer(
 
       // Bind the current GPU resource without reading back its contents.
       bindGroup = bindingsFor(lens.heightBuffer)
-      uniforms.update(aspect)
+      uniforms.update(viewProjection)
     },
 
     draw(pass) {
