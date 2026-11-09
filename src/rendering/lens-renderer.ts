@@ -1,3 +1,4 @@
+import { mat4 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
 import type { LensState } from '../contracts'
 import { buildLensIndices } from '../geometry/lens-mesh'
@@ -27,27 +28,28 @@ function createLensIndexBuffer(device: GPUDevice, lens: LensState) {
 function createLensUniforms(
   device: GPUDevice,
   lens: LensState,
+  model: Mat4,
 ) {
-  // Store the MVP matrix and grid parameters in one uniform block.
+  // Store MVP, local-to-world, and grid parameters in one uniform block.
   const buffer = device.createBuffer({
     label: 'Lens uniforms',
-    size: 80,
+    size: 144,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
 
-  const data = new ArrayBuffer(80)
+  const data = new ArrayBuffer(144)
   const mvp = new Float32Array(data, 0, 16)
+  new Float32Array(data, 64, 16).set(model)
   const parameters = new DataView(data)
 
   // Match the WGSL field types and byte offsets.
-  parameters.setUint32(64, lens.columns, true)
-  parameters.setUint32(68, lens.rows, true)
-  parameters.setFloat32(72, lens.sizeX, true)
-  parameters.setFloat32(76, lens.sizeY, true)
+  parameters.setUint32(128, lens.columns, true)
+  parameters.setUint32(132, lens.rows, true)
+  parameters.setFloat32(136, lens.sizeX, true)
+  parameters.setFloat32(140, lens.sizeY, true)
 
   const update = (viewProjection: Mat4) => {
-    // Lens-local coordinates are world coordinates, so the model matrix is identity.
-    mvp.set(viewProjection)
+    mat4.multiply(viewProjection, model, mvp)
     device.queue.writeBuffer(buffer, 0, data)
   }
 
@@ -93,10 +95,11 @@ export function createLensRenderer(
   device: GPUDevice,
   format: GPUTextureFormat,
   initialLens: LensState,
+  model: Mat4,
 ): LensRenderer {
   const { columns, rows, sizeX, sizeY } = initialLens
   const indices = createLensIndexBuffer(device, initialLens)
-  const uniforms = createLensUniforms(device, initialLens)
+  const uniforms = createLensUniforms(device, initialLens, model)
   const pipeline = createLensPipeline(device, format)
   const layout = pipeline.getBindGroupLayout(0)
   const bindings = new WeakMap<GPUBuffer, GPUBindGroup>()
