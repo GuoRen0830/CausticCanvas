@@ -1,9 +1,12 @@
 import './style.css'
+import { mat4 } from 'wgpu-matrix'
 import { config } from './config'
 import { initializeGPU } from './gpu/context'
 import { createDrawingPad } from './ui/drawing-pad'
 import { createFlatLens } from './geometry/lens-mesh'
 import { createLensRenderer } from './rendering/lens-renderer'
+import { createOrbitCamera } from './rendering/orbit-camera'
+import { createSceneRenderer } from './rendering/scene-renderer'
 import { createCausticDisplay } from './rendering/caustic-display'
 import { createFrameLoop } from './frame-loop'
 import { createSimulation } from './simulation'
@@ -50,18 +53,22 @@ async function main() {
   let lensRenderer: ReturnType<typeof createLensRenderer> | null = null
   let causticDisplay: ReturnType<typeof createCausticDisplay> | null = null
   let frameLoop: ReturnType<typeof createFrameLoop> | null = null
+  let camera: ReturnType<typeof createOrbitCamera> | null = null
+  let sceneRenderer: ReturnType<typeof createSceneRenderer> | null = null
 
   function dispose() {
     if (disposed) return
     disposed = true
     events.abort()
     frameLoop?.destroy()
+    camera?.destroy()
     drawingPad?.destroy()
     startupEncoder = null
     lastResult = null
 
     try {
       lensRenderer?.destroy()
+      sceneRenderer?.destroy()
       causticDisplay?.destroy()
       optimizer?.destroy()
       forward?.destroy()
@@ -147,8 +154,26 @@ async function main() {
     causticCanvas.height = state.receiver.height
     causticContext.configure({ device, format, alphaMode: 'opaque' })
 
-    const lensView = createLensRenderer(device, format, state.lens)
+    // Rotate local +Z downward and place the receiver on world Y = 0.
+    const opticalToWorld = mat4.multiply(
+      mat4.translation([0, state.receiver.z, 0]),
+      mat4.rotationX(Math.PI / 2),
+    )
+    const orbitCamera = createOrbitCamera(canvas, {
+      target: [0, (state.receiver.z - config.lens.thickness) / 2, 0],
+      span: Math.max(
+        state.lens.sizeX, state.lens.sizeY,
+        state.receiver.sizeX, state.receiver.sizeY, state.receiver.z,
+      ),
+    }, () => frameLoop?.requestFrame())
+    camera = orbitCamera
+
+    const lensView = createLensRenderer(device, format, state.lens, opticalToWorld)
     lensRenderer = lensView
+    const sceneView = createSceneRenderer(
+      device, format, state.receiver, config.scene.box, opticalToWorld,
+    )
+    sceneRenderer = sceneView
     const causticView = createCausticDisplay(device, format)
     causticDisplay = causticView
     causticView.setExposure(config.rendering.causticExposure)
@@ -226,7 +251,9 @@ async function main() {
       }
 
       // Bind the geometry that produced the displayed caustic image.
-      lensView.update(lastResult?.beams.lens ?? state.lens, width / height)
+      const viewProjection = orbitCamera.update(width / height)
+      lensView.update(lastResult?.beams.lens ?? state.lens, viewProjection)
+      sceneView.update(viewProjection)
       const pass = encoder.beginRenderPass({
         colorAttachments: [{
           view: context.getCurrentTexture().createView(),
@@ -241,6 +268,8 @@ async function main() {
           depthStoreOp: 'discard',
         },
       })
+      // One shared depth attachment resolves visibility across both pipelines.
+      sceneView.draw(pass)
       lensView.draw(pass)
       pass.end()
 

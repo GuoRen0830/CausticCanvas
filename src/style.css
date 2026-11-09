@@ -31,6 +31,7 @@ h1 {
 }
 
 #viewport {
+  position: relative;
   min-width: 0;
   min-height: 0;
 }
@@ -39,6 +40,24 @@ h1 {
   display: block;
   width: 100%;
   height: 100%;
+  touch-action: none;
+  cursor: grab;
+}
+
+#gpu-canvas.is-orbiting {
+  cursor: grabbing;
+}
+
+#camera-help {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  right: 16px;
+  margin: 0;
+  color: #c4d5dc;
+  font-size: 13px;
+  pointer-events: none;
+  user-select: none;
 }
 
 #workspace {

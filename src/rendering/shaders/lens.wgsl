@@ -1,5 +1,6 @@
 struct LensUniforms {
   mvp: mat4x4<f32>,
+  model: mat4x4<f32>,
   gridSize: vec2<u32>,
   apertureSize: vec2<f32>,
 }
@@ -12,7 +13,7 @@ var<storage, read> heights: array<f32>;
 
 struct VertexOutput {
   @builtin(position) clipPosition: vec4<f32>,
-  @location(0) localPosition: vec3<f32>,
+  @location(0) worldPosition: vec3<f32>,
 }
 
 @vertex
@@ -37,28 +38,29 @@ fn vertexMain(
 
   var output: VertexOutput;
   output.clipPosition = lensUniforms.mvp * vec4<f32>(position, 1.0);
-  output.localPosition = position;
+  output.worldPosition = (lensUniforms.model * vec4<f32>(position, 1.0)).xyz;
 
   return output;
 }
 
 @fragment
 fn fragmentMain(
-  @location(0) localPosition: vec3<f32>,
+  @location(0) worldPosition: vec3<f32>,
 ) -> @location(0) vec4<f32> {
   // Estimate surface tangents from neighboring fragment positions.
-  let tangentX = dpdx(localPosition);
-  let tangentY = dpdy(localPosition);
+  let tangentX = dpdx(worldPosition);
+  let tangentY = dpdy(worldPosition);
 
   // Framebuffer Y points down, so reverse the cross-product order.
   let normal = normalize(cross(tangentY, tangentX));
 
-  // Use a fixed inspection light in lens-local space.
-  let toLight = normalize(vec3<f32>(-0.4, 0.6, 1.0));
-  let diffuse = max(dot(normal, toLight), 0.0);
+  // Use the same world-space inspection light as the scene.
+  let toLight = normalize(vec3<f32>(-0.4, 0.8, 0.6));
+  // Two-sided inspection shading keeps either side readable.
+  let diffuse = abs(dot(normal, toLight));
 
   let baseColor = vec3<f32>(0.2, 0.75, 0.95);
-  let brightness = 0.2 + 0.8 * diffuse;
+  let brightness = 0.25 + 0.75 * diffuse;
 
   return vec4<f32>(baseColor * brightness, 1.0);
 }

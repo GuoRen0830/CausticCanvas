@@ -43,6 +43,13 @@ export const config = {
     // Read back the loss for logging every N iterations; 0 disables it.
     lossLogInterval: 100,
   },
+  scene: {
+    box: {
+      // Lens-local meters. The lower face is 0.15 m above the receiver.
+      center: [0.05, 0.03, 0.3],
+      size: [0.08, 0.08, 0.1],
+    },
+  },
   // Scheduling limit, independent of the optimizer's stopping policy.
   maxStepsPerFrame: 1,
   rendering: {
