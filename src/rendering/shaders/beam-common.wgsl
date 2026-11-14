@@ -13,7 +13,6 @@ struct Frame {
   beamCount: u32,
   boxMin: vec3f,
   boxMax: vec3f,
-  inspectionDirection: vec3f,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;

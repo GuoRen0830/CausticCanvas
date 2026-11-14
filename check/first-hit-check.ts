@@ -1,6 +1,7 @@
 import { mat4, vec3 } from 'wgpu-matrix'
 import { buildLensIndices, createFlatLens } from '../src/geometry/lens-mesh'
 import { createBeamRenderer } from '../src/rendering/beam-renderer'
+import { createLensRenderer } from '../src/rendering/lens-renderer'
 import { createHitTracer } from '../src/rendering/hit-tracer'
 import { buildSceneBvh } from '../src/rendering/scene-bvh'
 import { createSceneRenderer } from '../src/rendering/scene-renderer'
@@ -39,7 +40,7 @@ export async function checkFirstHits(device: GPUDevice, report: (line: string) =
   const buffer = device.createBuffer({ size: rays.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
   const field = { lens, buffer }
   device.queue.writeBuffer(buffer, 0, rays)
-  const frame = new Float32Array(60)
+  const frame = new Float32Array(56)
   const words = new Uint32Array(frame.buffer)
   words.set([lens.columns, lens.rows], 32)
   frame.set([lens.sizeX, lens.sizeY], 34)
@@ -54,6 +55,7 @@ export async function checkFirstHits(device: GPUDevice, report: (line: string) =
   const model = mat4.identity()
   const scene = createSceneRenderer(device, receiver, box, model, mesh)
   const beams = createBeamRenderer(device, 'rgba32float', spec, receiver, model, 1, box, mesh)
+  const lensPreview = createLensRenderer(device, 'rgba32float', lens, model)
   const tex = device.createTexture({ size: [64, 64], format: 'rgba32float',
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC })
   const read = device.createBuffer({ size: 64 * 64 * 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ })
@@ -146,7 +148,7 @@ export async function checkFirstHits(device: GPUDevice, report: (line: string) =
       device.queue.writeBuffer(buffer, 0, rays)
       return { beams: field, receiver, caustic: { width: 64, height: 64, kind: 'buffer' as const, buffer } }
     }
-    async function render(result: ReturnType<typeof setFlux>, shear: number, zoom = 1) {
+    async function render(result: ReturnType<typeof setFlux>, shear: number, zoom = 1, mode: 'lit' | 'lens' = 'lit') {
       const vp = mat4.scaling([10,-10,1])
       vp[0] *= zoom
       vp[5] *= zoom
@@ -154,27 +156,32 @@ export async function checkFirstHits(device: GPUDevice, report: (line: string) =
       vp[12] = -0.65 * vp[8]
       scene.update(vp)
       const e = device.createCommandEncoder()
-      beams.render(e, tex, vp, 'solver', 'lit', result, scene.draw, () => {})
+      lensPreview.update(lens, vp)
+      beams.render(e, tex, vp, 'solver', mode, result, scene.draw, lensPreview.draw)
       e.copyTextureToBuffer({ texture: tex }, { buffer: read, bytesPerRow: 64*16 }, [64,64])
       device.queue.submit([e.finish()])
       await read.mapAsync(GPUMapMode.READ)
       const rgba = new Float32Array(read.getMappedRange())
-      const red = Float32Array.from({ length: 4096 }, (_,i) => rgba[4*i])
+      const pixels = rgba.slice()
       read.unmap()
-      return red
+      return pixels
     }
     const full = setFlux(flux)
     const top = await render(full, 0), orbit = await render(full, 0.45)
     const dark = setFlux(0)
-    const base = await render(dark, 0), orbitBase = await render(dark, 0.45)
-    function irradiance(lit: Float32Array, ambient: Float32Array, x: number) {
-      const i = 32 * 64 + Math.floor((x / 0.2 + 0.5) * 64)
-      return (lit[i] - ambient[i]) * Math.PI
+    if (!(await render(dark, 0)).every((v,i) => v === (i%4 === 3 ? 1 : 0))) {
+      throw new Error('Zero-flux lit scene must be opaque black across background and geometry')
     }
-    near(irradiance(top, base, 0.04), 1, 0.003, 'Floor beyond solver receiver')
-    near(irradiance(top, base, -0.045), 1 / Math.hypot(1, 0.7), 0.003, 'Sloped panel')
-    near(irradiance(orbit, orbitBase, -0.045), 0, 0.003, 'Offscreen panel shadows floor')
-    near(irradiance(orbit, orbitBase, 0.04), 1, 0.003, 'Unshadowed floor after orbit')
+    if (!(await render(dark, 0, 1, 'lens')).some((v,i) => i%4 === 0 && v > 0)) throw new Error('Missing lens inspection image')
+    report('PASS zero-flux lit scene is opaque black in every RGBA pixel; lens inspection remains visible')
+    function irradiance(lit: Float32Array, x: number) {
+      const i = 32 * 64 + Math.floor((x / 0.2 + 0.5) * 64)
+      return lit[4*i] * Math.PI
+    }
+    near(irradiance(top, 0.04), 1, 0.003, 'Floor beyond solver receiver')
+    near(irradiance(top, -0.045), 1 / Math.hypot(1, 0.7), 0.003, 'Sloped panel')
+    near(irradiance(orbit, -0.045), 0, 0.003, 'Offscreen panel shadows floor')
+    near(irradiance(orbit, 0.04), 1, 0.003, 'Unshadowed floor after orbit')
     report('PASS sloped hit irradiance, offscreen blocker, floor beyond receiver, and same-buffer result refresh')
 
     // Average many subpixel footprints with non-integer projected edges.
@@ -190,17 +197,16 @@ export async function checkFirstHits(device: GPUDevice, report: (line: string) =
       device.queue.writeBuffer(denseBuffer, 0, terms)
       const zoom = 0.917
       const image = await render({ ...full, beams: { lens: dense, buffer: denseBuffer } }, 0, zoom)
-      const ambient = await render(dark, 0, zoom)
       let worst = 0
       for (let y = 20; y < 44; y++) for (let x = 35; x < 51; x++) {
         const i = 64*y+x
-        worst = Math.max(worst, Math.abs((image[i] - ambient[i]) * Math.PI - 1))
+        worst = Math.max(worst, Math.abs(image[4*i] * Math.PI - 1))
       }
       near(worst, 0, device.features.has('float32-blendable') ? 2e-5 : 0.025, 'Subpixel energy')
       report('PASS dense subpixel splats, max interior irradiance error ' + worst.toExponential(2) + ' W/m2')
     } finally { denseBuffer.destroy(); dense.heightBuffer.destroy() }
   } finally {
-    tracer.destroy(); beams.destroy(); scene.destroy(); uniform.destroy(); read.destroy(); tex.destroy()
+    lensPreview.destroy(); tracer.destroy(); beams.destroy(); scene.destroy(); uniform.destroy(); read.destroy(); tex.destroy()
     buffer.destroy(); lens.heightBuffer.destroy()
   }
 }

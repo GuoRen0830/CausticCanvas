@@ -1,7 +1,7 @@
 import { createForwardModel, type OpticsOptions } from '../../src/optics/forward-model'
 import { createLensOptimizer } from '../../src/optimization/lens-optimizer'
 import { config } from '../../src/config'
-import type { ForwardInput } from '../../src/contracts'
+import type { ForwardInput, ForwardModel, LensOptimizer } from '../../src/contracts'
 import { extendedChecks } from './extended'
 
 type Strategy = NonNullable<OpticsOptions['strategy']>
@@ -97,7 +97,13 @@ async function run() {
     const resolved=device.createBuffer({size:256,usage:GPUBufferUsage.QUERY_RESOLVE|GPUBufferUsage.COPY_SRC})
     const staging=device.createBuffer({size:256,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST})
     let cursor=0,recording=false,labels:string[]=[]
-    const contexts=[]
+    const contexts: {
+      strategy: Strategy
+      model: ForwardModel
+      optimizer: LensOptimizer
+      phases: Record<string, number>[]
+      iteration: Record<string, number>[]
+    }[] = []
     let referenceImage:Float32Array|null=null,referenceGradient:Float32Array|null=null
     for(const strategy of strategies) {
       const model=(await createForwardModel(device,input,{strategy,timestamps(stage){
@@ -114,7 +120,7 @@ async function run() {
       const imageError=relative(image,referenceImage),gradientError=relative(gradient,referenceGradient!)
       if(imageError>3e-4||gradientError>3e-4)throw new Error('Variant mismatch: '+JSON.stringify({c,strategy,imageError,gradientError}))
       equivalence.push({...c,strategy,imageError,gradientError})
-      contexts.push({strategy,model,optimizer,phases:[] as Record<string,number>[],iteration:[] as Record<string,number>[]})
+      contexts.push({strategy,model,optimizer,phases:[],iteration:[]})
     }
     for(const mode of ['phases','iteration'] as const) {
       for(let round=0;round<3;round++) {

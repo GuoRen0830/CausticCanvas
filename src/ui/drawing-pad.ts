@@ -55,7 +55,9 @@ export function createDrawingPad(
 
   const publish = () => {
     const { width, height } = canvas
-    const pixels = context.getImageData(0, 0, width, height).data
+    const strokes = context.getImageData(0, 0, width, height)
+    const pixels = strokes.data
+    let clipped = false
     const values = new Float32Array(width * height)
 
     // White strokes use alpha as their weight. Flip rows for optical coordinates.
@@ -63,9 +65,15 @@ export function createDrawingPad(
       for (let x = 0; x < width; x++) {
         const source = 4 * (y * width + x) + 3
         const destination = (height - 1 - y) * width + x
-        values[destination] = view?.surfaceAreas[destination] === 0 ? 0 : pixels[source] / 255
+        if (pixels[source] && view?.surfaceAreas[destination] === 0) {
+          pixels[source] = 0
+          clipped = true
+        }
+        values[destination] = pixels[source] / 255
       }
     }
+
+    if (clipped) context.putImageData(strokes, 0, 0)
 
     // Publish a new snapshot after each completed stroke or clear.
     onChange({ width, height, version: ++version, values })

@@ -5,14 +5,15 @@ Run `npm ci`, then `npm run dev`. Open these paths on the local server in a WebG
 | Page | Coverage |
 | --- | --- |
 | `/check/optics-check.html` | Independent CPU image/flux comparisons, finite-difference gradients, output clearing, and resource contracts |
-| `/check/beam-check.html` | Beam additivity, receiver versus solver, analytic box shadows, GPU BVH hits versus CPU brute force, a sloped mesh, off-camera occlusion and illumination beyond the reference plane |
+| `/check/beam-check.html` | Beam additivity, receiver versus solver, analytic box shadows, GPU BVH hits versus CPU brute force, a sloped mesh, off-camera occlusion, illumination beyond the reference plane, zero-flux black output, lens inspection, and scene-training gradients |
+| `/check/beam-check.html?stroke` | Adds the 3000-step horizontal stroke across the box and floor at a fixed 33 by 33 grid |
 | `/check/optimizer-check.html` | Target normalization, loss and regularization gradients, Adam updates, and optimizer lifecycle |
 | `/check/loss-filter-check.html` | GPU Gaussian-filter gradients against CPU finite differences, including boundaries and non-square images |
 | `/check/integration-check.html?shape=circle` | Real A/B optimization, received power, stray light, stopping, clearing, warm restart, and final-preview consistency |
 | `/check/a-study/?checks-only` | 12 edge cases across all four optical strategies |
 | `/check/a-study/` | Extended checks and per-stage/full-step GPU benchmarks; requires `timestamp-query` support |
 
-The first, second, and fourth pages report `ALL PASSED`; the filter page reports `passed: true`. Extended checks and benchmarks show completion in the page status. Also inspect the browser console for GPU validation errors.
+The optics, beam, optimizer and integration pages report `ALL PASSED`. The filter page reports `passed: true`. Extended checks and benchmarks show completion in the page status. Also inspect the browser console for GPU validation errors.
 
 The integration page also supports `shape=offset` and `shape=bar`, and `strategy=baseline`, `cached`, `cooperative`, or `striped`. These options belong to diagnostic pages; the application defaults to `baseline`.
 

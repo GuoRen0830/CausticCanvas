@@ -16,7 +16,7 @@ import { createSimulation } from './simulation'
 import { buildDesignView } from './optics/design-view'
 import { createForwardModel } from './optics/forward-model'
 import { createLensOptimizer } from './optimization/lens-optimizer'
-import type { AppState, ForwardModel, ForwardResult, LensOptimizer } from './contracts'
+import type { AppState, ForwardModel, LensOptimizer } from './contracts'
 
 async function main() {
   const canvas = document.querySelector('#gpu-canvas')
@@ -59,8 +59,6 @@ async function main() {
   let beamRenderer: ReturnType<typeof createBeamRenderer> | null = null
   let forward: ForwardModel | null = null
   let optimizer: LensOptimizer | null = null
-  let lastResult: ForwardResult | null = null
-  let startupEncoder: GPUCommandEncoder | null = null
   let drawingPad: ReturnType<typeof createDrawingPad> | null = null
   let lensRenderer: ReturnType<typeof createLensRenderer> | null = null
   let causticDisplay: ReturnType<typeof createCausticDisplay> | null = null
@@ -75,8 +73,6 @@ async function main() {
     frameLoop?.destroy()
     camera?.destroy()
     drawingPad?.destroy()
-    startupEncoder = null
-    lastResult = null
 
     try {
       lensRenderer?.destroy()
@@ -132,10 +128,10 @@ async function main() {
       const running = optimizer !== null && hasTarget && !optimizationDone
       frameLoop.setRunning(running)
 
-      if (!forward) {
-        causticStatus.textContent = 'Forward model not implemented.'
-      } else if (!optimizer) {
-        causticStatus.textContent = 'Forward preview. Optimizer not implemented.'
+      if (!optimizer) {
+        causticStatus.textContent = state.optics.incidentIrradiance === 0
+          ? 'Source is off.'
+          : 'Forward preview only.'
       } else if (!hasTarget) {
         causticStatus.textContent = 'Draw a pattern to optimize.'
       } else {
@@ -182,8 +178,6 @@ async function main() {
     }, () => frameLoop?.requestFrame())
     camera = orbitCamera
 
-    const lensView = createLensRenderer(device, format, state.lens, opticalToWorld)
-    lensRenderer = lensView
     const sceneView = createSceneRenderer(
       device, state.receiver, config.scene.box, opticalToWorld, mesh,
     )
@@ -196,6 +190,7 @@ async function main() {
     let beamSource: BeamSource = 'solver'
     const viewHelp: Record<BeamView, string> = {
       lit: cameraHelp.textContent ?? '',
+      lens: 'Inspect the lens surface · Drag to orbit · Scroll to zoom',
       candidates: 'Candidate count · Blue 1 · Cyan 2 · Green 4 · Yellow 16 · Red 64+',
       footprint: 'Visible floor irradiance after scene occlusion',
       blocked: 'Floor irradiance intercepted by the box · Brighter means more light blocked',
@@ -210,7 +205,8 @@ async function main() {
       }
       if (beamSource !== 'solver' && ['plane', 'difference'].includes(beamSelect.value)) beamSelect.value = 'footprint'
       beamMode = beamSelect.value as BeamView
-      methodSelect.disabled = ['plane', 'difference', 'blocked'].includes(beamMode)
+      sourceSelect.disabled = beamMode === 'lens'
+      methodSelect.disabled = ['plane', 'difference', 'blocked', 'lens'].includes(beamMode)
       cameraHelp.textContent = viewHelp[beamMode]
       frameLoop?.requestFrame()
     }
@@ -230,29 +226,23 @@ async function main() {
     }
     forward = await createForwardModel(device, initial, { designView })
     if (disposed) {
-      forward?.destroy()
+      forward.destroy()
       return
     }
 
-    let simulation: ReturnType<typeof createSimulation> | null = null
-    if (forward) {
-      optimizer = await createLensOptimizer(device, initial, forward)
-      if (disposed) {
-        optimizer?.destroy()
-        return
-      }
-      simulation = createSimulation(state, forward, optimizer ?? undefined)
-
-      // Record the first evaluation now; submit it with the first rendered frame.
-      startupEncoder = device.createCommandEncoder({ label: 'Initial optical frame' })
-      lastResult = simulation.encode(startupEncoder, 0).result
-      await causticView.prepare(lastResult.caustic.kind)
-      if (disposed) return
-      causticView.setImage(lastResult.caustic)
-    } else {
-      sourceSelect.querySelector<HTMLOptionElement>('option[value="solver"]')!.disabled = true
-      sourceSelect.value = 'single'
+    optimizer = await createLensOptimizer(device, initial, forward)
+    if (disposed) {
+      optimizer?.destroy()
+      return
     }
+    const simulation = createSimulation(state, forward, optimizer ?? undefined)
+
+    // Record the first evaluation now; submit it with the first rendered frame.
+    let startupEncoder: GPUCommandEncoder | null = device.createCommandEncoder({ label: 'Initial optical frame' })
+    let lastResult = simulation.encode(startupEncoder, 0).result
+    await causticView.prepare(lastResult.caustic.kind)
+    if (disposed) return
+    causticView.setImage(lastResult.caustic)
     changeView()
 
     const encodeFrame = (steps: number) => {
@@ -264,7 +254,7 @@ async function main() {
       optimizer?.setTarget(state.target)
 
       // A pure redraw reuses the last result; running frames evaluate updated heights.
-      if (simulation && !initialFrame && steps > 0) {
+      if (!initialFrame && steps > 0) {
         const batch = simulation.encode(encoder, steps)
         lastResult = batch.result
         causticView.setImage(lastResult.caustic)
@@ -292,11 +282,14 @@ async function main() {
 
       // Bind the geometry that produced the displayed caustic image.
       const viewProjection = orbitCamera.update(width / height)
-      lensView.update(lastResult?.beams.lens ?? state.lens, viewProjection)
+      if (beamMode === 'lens') {
+        lensRenderer ??= createLensRenderer(device, format, state.lens, opticalToWorld)
+        lensRenderer.update(state.lens, viewProjection)
+      }
       sceneView.update(viewProjection)
       beamView.render(
         encoder, context.getCurrentTexture(), viewProjection, beamSource, beamMode, lastResult,
-        sceneView.draw, lensView.draw, methodSelect.value === 'analytic' ? 'analytic' : 'first-hit',
+        sceneView.draw, pass => lensRenderer?.draw(pass), methodSelect.value === 'analytic' ? 'analytic' : 'first-hit',
       )
 
       const causticPass = encoder.beginRenderPass({

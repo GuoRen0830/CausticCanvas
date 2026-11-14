@@ -1,4 +1,4 @@
-import { mat4, vec3 } from 'wgpu-matrix'
+import { mat4 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
 import type { CausticImage, ForwardResult, ReceiverPlane } from '../contracts'
 import { buildSceneMesh } from './scene-mesh'
@@ -16,7 +16,7 @@ import displayColor from './shaders/irradiance-display.wgsl?raw'
 
 export type BeamSource = 'solver' | 'single' | 'pair'
 export type SceneMethod = 'first-hit' | 'analytic'
-export type BeamView = 'lit' | 'candidates' | 'footprint' | 'plane' | 'difference' | 'blocked'
+export type BeamView = 'lit' | 'candidates' | 'footprint' | 'plane' | 'difference' | 'blocked' | 'lens'
 const modeId = { lit: 0, candidates: 1, footprint: 2, plane: 3, difference: 4, blocked: 5 }
 
 const clear = (view: GPUTextureView): GPURenderPassColorAttachment => ({
@@ -30,15 +30,14 @@ export function createBeamRenderer(
   mesh = buildSceneMesh(receiver, box),
 ) {
   const tests = createTestBeams(device, aperture)
-  const data = new Float32Array(60)
+  const data = new Float32Array(56)
   const words = new Uint32Array(data.buffer)
   const localVP = data.subarray(0, 16)
   const inverseLocalVP = data.subarray(16, 32)
   // Shared scene geometry, in optical-local meters. Each uniform vec3 starts
-  // on a 16-byte boundary. Rotate the inspection light into this space once.
+  // on a 16-byte boundary.
   data.set(box.center.map((c, axis) => c - 0.5 * box.size[axis]), 48)
   data.set(box.center.map((c, axis) => c + 0.5 * box.size[axis]), 52)
-  data.set(vec3.normalize(vec3.transformMat4Upper3x3([-0.4, 0.8, 0.6], mat4.inverse(opticalToWorld))), 56)
   const uniform = device.createBuffer({
     label: 'Beam frame', size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
@@ -83,14 +82,12 @@ export function createBeamRenderer(
     primitive: { topology: 'triangle-strip' },
   })
   const compositeLayout = frameLayout([
-    { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
     { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
     { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
   ])
   const composite = device.createRenderPipeline({
     label: 'Scene composite', layout: device.createPipelineLayout({ bindGroupLayouts: [compositeLayout] }), vertex: { module, entryPoint: 'fullscreenVS' },
     fragment: { module, entryPoint: 'compositeFS', targets: [{ format: canvasFormat }] },
-    depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' },
   })
   const uniformEntry = { binding: 0, resource: { buffer: uniform } }
   function texture(label: string, format: GPUTextureFormat, width: number, height: number) {
@@ -117,7 +114,7 @@ export function createBeamRenderer(
     ] })
     const compositeGroup = device.createBindGroup({
       layout: composite.getBindGroupLayout(0),
-      entries: [uniformEntry, normalEntry, { binding: 3, resource: albedoView }, { binding: 4, resource: lightView }],
+      entries: [uniformEntry, { binding: 3, resource: albedoView }, { binding: 4, resource: lightView }],
     })
     return {
       width, height, albedoView, normalView, depthView, lightView, objectView, beamGroup, splatGroup, compositeGroup,
@@ -211,6 +208,13 @@ export function createBeamRenderer(
   }
 
   let screen: ReturnType<typeof screenTargets> | undefined
+  function screenFor(output: GPUTexture) {
+    if (!screen || screen.width !== output.width || screen.height !== output.height) {
+      screen?.destroy()
+      screen = screenTargets(output.width, output.height)
+    }
+    return screen
+  }
   let plane: ReturnType<typeof planeTargets> | undefined
   let boundField: { heights: GPUBuffer; beams: GPUBuffer; group: GPUBindGroup } | undefined
 
@@ -222,6 +226,16 @@ export function createBeamRenderer(
       method: SceneMethod = 'first-hit',
     ) {
       const compare = mode === 'plane' || mode === 'difference'
+      if (mode === 'lens') {
+        const targets = screenFor(output)
+        const pass = encoder.beginRenderPass({
+          label: 'Inspect lens shape', colorAttachments: [{ view: output.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
+          depthStencilAttachment: { view: targets.depthView, depthLoadOp: 'clear', depthClearValue: 1, depthStoreOp: 'discard' },
+        })
+        drawLens(pass)
+        pass.end()
+        return
+      }
       if ((compare || source === 'solver') && !result) throw new Error('Missing forward result for beam rendering.')
       if (compare && source !== 'solver') throw new Error('Plane comparison requires solver beams.')
       const field = source === 'solver' ? result!.beams : tests.field
@@ -268,13 +282,10 @@ export function createBeamRenderer(
         return
       }
 
-      if (!screen || screen.width !== output.width || screen.height !== output.height) {
-        screen?.destroy()
-        screen = screenTargets(output.width, output.height)
-      }
+      const targets = screenFor(output)
       const geometry = encoder.beginRenderPass({
-        label: 'Scene G-buffer', colorAttachments: [clear(screen.albedoView), clear(screen.normalView), clear(screen.objectView)],
-        depthStencilAttachment: { view: screen.depthView, depthLoadOp: 'clear', depthClearValue: 1, depthStoreOp: 'store' },
+        label: 'Scene G-buffer', colorAttachments: [clear(targets.albedoView), clear(targets.normalView), clear(targets.objectView)],
+        depthStencilAttachment: { view: targets.depthView, depthLoadOp: 'clear', depthClearValue: 1, depthStoreOp: 'store' },
       })
       drawScene(geometry)
       geometry.end()
@@ -284,23 +295,21 @@ export function createBeamRenderer(
       const cached = !firstHit ? null : solverHits ? tracer.fromSolver(solverHits)
         : tracer.update(encoder, field, count, source === 'solver' ? result! : tests.field)
       const pass = encoder.beginRenderPass({
-        label: cached ? 'Splat first hits' : 'Accumulate beams', colorAttachments: [clear(screen.lightView)],
+        label: cached ? 'Splat first hits' : 'Accumulate beams', colorAttachments: [clear(targets.lightView)],
       })
       pass.setPipeline(cached ? splat : accumulate)
-      pass.setBindGroup(0, cached ? screen.splatGroup : screen.beamGroup)
+      pass.setBindGroup(0, cached ? targets.splatGroup : targets.beamGroup)
       pass.setBindGroup(1, boundField.group)
       if (cached) pass.setBindGroup(2, cached.group)
       pass.draw(4, count)
       pass.end()
 
       const show = encoder.beginRenderPass({
-        label: 'Display scene and lens', colorAttachments: [clear(output.createView())],
-        depthStencilAttachment: { view: screen.depthView, depthLoadOp: 'load', depthStoreOp: 'discard' },
+        label: 'Display beam lighting', colorAttachments: [clear(output.createView())],
       })
       show.setPipeline(composite)
-      show.setBindGroup(0, screen.compositeGroup)
+      show.setBindGroup(0, targets.compositeGroup)
       show.draw(3)
-      if (mode === 'lit') drawLens(show)
       show.end()
     },
     destroy() {

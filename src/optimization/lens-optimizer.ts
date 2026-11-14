@@ -141,7 +141,8 @@ export async function createLensOptimizer(
   const lensMeta = { ...initial.lens }
   const receiver = { ...initial.receiver }
   const power = incidentPower(initial)
-  if (!(power > 0)) throw new Error('Incident power must be positive.')
+  if (!Number.isFinite(power) || power < 0) throw new Error('Invalid incident power.')
+  if (power === 0) return null
 
   const vertexCount = lensMeta.columns * lensMeta.rows
   const pixelCount = receiver.width * receiver.height
@@ -311,12 +312,15 @@ export async function createLensOptimizer(
     // which the caller makes only after submitting the previous batch.
     // Mapping inside encodeStep would invalidate a multi-step batch.
     let lossState: 'idle' | 'copied' | 'mapping' = 'idle'
+    let targetRun = 0
+    let lossRun = 0
     let lossIteration = 0
     const lossHistory: { iteration: number, loss: number }[] = []
     const flushLossReadback = () => {
       if (lossState !== 'copied' || destroyed) return
       lossState = 'mapping'
       const loggedIteration = lossIteration
+      const loggedRun = lossRun
       lossStaging.mapAsync(GPUMapMode.READ).then(() => {
         if (destroyed) return
         const values = new Float32Array(lossStaging.getMappedRange())
@@ -324,10 +328,11 @@ export async function createLensOptimizer(
         for (const value of values) loss += value
         lossStaging.unmap()
         lossState = 'idle'
+        if (loggedRun !== targetRun) return
         lossHistory.push({ iteration: loggedIteration, loss })
         console.info(`[optimizer] iteration ${loggedIteration} loss ${loss.toExponential(4)}`)
       }, () => {
-        // Device loss or destruction; logging is diagnostic only.
+        lossState = 'idle'
       })
     }
 
@@ -338,14 +343,16 @@ export async function createLensOptimizer(
         if (destroyed) return
         flushLossReadback()
         if (!target) {
+          if (targetVersion !== null) targetRun++
           targetVersion = null
           active = false
           done = true
           return
         }
         if (target.version === targetVersion) return
-        targetVersion = target.version
         const normalized = normalizeTarget(target, receiver, power, forward.targetSurfaceAreas)
+        targetVersion = target.version
+        targetRun++
         active = normalized !== null
         done = !active
         if (!normalized) return
@@ -417,6 +424,7 @@ export async function createLensOptimizer(
         ) {
           encoder.copyBufferToBuffer(lossPartials, 0, lossStaging, 0, lossGroups * 4)
           lossState = 'copied'
+          lossRun = targetRun
           lossIteration = iteration - 1
         }
 

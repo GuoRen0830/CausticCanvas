@@ -92,8 +92,7 @@ export async function checkSceneOcclusion(
     expect(otherView[pixel(0.018, 0.01)], 1, 'Shadow from the opposite camera')
     report('PASS shadow remains on the same floor patch from the opposite view and with the box offscreen')
 
-    // Recover direct irradiance by subtracting a zero-flux rendering of the
-    // same face. R of the albedo texture is round(0.85*255)/255 for the box.
+    // The red channel of the box albedo is round(0.85*255)/255.
     const left = camera(-0.4)
     const right = camera(0.4)
     const topIndex = pixel(0.05 - 0.4 * (0.25 - receiver.z), 0.02)
@@ -103,12 +102,11 @@ export async function checkSceneOcclusion(
     const litRight = await draw(field, 'lit', right)
     rays[3] = rays[7] = 0
     device.queue.writeBuffer(buffer, 0, rays)
-    const baseLeft = await draw(field, 'lit', left)
-    const baseRight = await draw(field, 'lit', right)
+    if (!(await draw(field, 'lit', left)).every(v => v === 0)) throw new Error('Box reference has a light-independent term')
     const toIrradiance = Math.PI / (217 / 255)
-    expect((litLeft[topIndex] - baseLeft[topIndex]) * toIrradiance, 1, 'Box top')
-    expect((litLeft[leftIndex] - baseLeft[leftIndex]) * toIrradiance, 0.1, 'Box illuminated side')
-    expect((litRight[rightIndex] - baseRight[rightIndex]) * toIrradiance, 0, 'Box back-facing side')
+    expect(litLeft[topIndex] * toIrradiance, 1, 'Box top')
+    expect(litLeft[leftIndex] * toIrradiance, 0.1, 'Box illuminated side')
+    expect(litRight[rightIndex] * toIrradiance, 0, 'Box back-facing side')
     report('PASS box top 1 W/m², inclined light on the side 0.1 W/m², opposite side 0 W/m²')
 
     // Slide the source behind the box but before the floor. Any intersection
@@ -121,7 +119,7 @@ export async function checkSceneOcclusion(
     expect(afterBox[pixel(0.05, 0.03)], 1, 'Box behind source')
     expect(noShadow[pixel(0.05, 0.03)], 0, 'No blocker on finite segment')
     const upstreamFace = await draw(field, 'lit', left)
-    expect((upstreamFace[topIndex] - baseLeft[topIndex]) * toIrradiance, 0, 'Box face upstream of source')
+    expect(upstreamFace[topIndex] * toIrradiance, 0, 'Box face upstream of source')
     report('PASS box behind the emitting triangle casts no shadow')
   } finally {
     buffer.destroy()

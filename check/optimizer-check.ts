@@ -3,7 +3,8 @@ import { config } from '../src/config'
 import type { ForwardInput, ForwardModel, ForwardResult, LensState, TargetImage } from '../src/contracts'
 
 const log: string[] = []
-const say = (s: string) => { log.push(s); console.log(s) }
+const output = document.querySelector('#output')!
+const say = (s: string) => { log.push(s); output.textContent = log.join('\n'); console.log(s) }
 let failures = 0
 const check = (ok: boolean, name: string) => { if (!ok) failures++; say(`${ok ? 'PASS' : 'FAIL'} ${name}`) }
 
@@ -84,9 +85,9 @@ function makeToyForward(device: GPUDevice, input: ForwardInput, kind: 'buffer' |
         { binding: 0, resource: { buffer: params } }, { binding: 3, resource: { buffer: pixelGradient } }, { binding: 4, resource: { buffer: heightGradient } }] }))
       pass.dispatchWorkgroups(Math.ceil(lens.columns * lens.rows / 64)); pass.end()
     },
-    destroy() {},
+    destroy() { params.destroy(); image.destroy(); texture.destroy(); beams.destroy() },
   }
-  return { model, captured, image }
+  return { model, captured }
 }
 
 function heightsBuffer(device: GPUDevice, values: Float32Array) {
@@ -126,7 +127,7 @@ async function main() {
   const lensOf = (buf: GPUBuffer): LensState => ({ columns: cols, rows, sizeX: 0.2, sizeY: 0.2, heightBuffer: buf })
 
   // 1. Target normalization conserves power.
-  const w = new Float32Array(64 * 64); for (let i = 0; i < 300; i++) w[(i * 37) % w.length] = Math.random()
+  const w = new Float32Array(64 * 64); for (let i = 0; i < 300; i++) w[(i * 37) % w.length] = ((i * 73) % 301) / 300
   const T = normalizeTarget({ width: 64, height: 64, version: 1, values: w }, receiver, 0.04)!
   const dA = (0.4 / 64) ** 2
   const total = T.reduce((a, b) => a + b, 0) * dA
@@ -140,6 +141,8 @@ async function main() {
     const input: ForwardInput = { lens: lensOf(heightsBuffer(device, h)), optics, receiver }
     const toy = makeToyForward(device, input, 'buffer', { zeroOptical: true })
     const opt = (await createLensOptimizer(device, input, toy.model, settings))!
+    const dark = await createLensOptimizer(device, { ...input, optics: { ...optics, incidentIrradiance: 0 } }, toy.model)
+    check(dark === null, 'zero incident power allows preview without optimization')
     opt.setTarget({ width: 64, height: 64, version: 1, values: w })
     const enc = device.createCommandEncoder()
     opt.encodeStep(enc, input)
@@ -156,7 +159,7 @@ async function main() {
       maxErr = Math.max(maxErr, Math.abs(fd - gpu[k])); maxMag = Math.max(maxMag, Math.abs(fd))
     }
     check(maxMag > 0 && maxErr / maxMag < 1e-3, `regularization gradient rel err ${(maxErr / maxMag).toExponential(2)} (max |g| ${maxMag.toExponential(2)})`)
-    opt.destroy()
+    opt.destroy(); toy.model.destroy(); input.lens.heightBuffer.destroy()
   }
 
   // 3. Pixel gradient, convergence, lifecycle, for both caustic kinds.
@@ -180,16 +183,14 @@ async function main() {
     device.queue.submit([enc.finish()])
     check(lens.heightBuffer !== input.lens.heightBuffer, `${kind}: step returns optimizer-owned heights`)
     const Tn = normalizeTarget(target, receiver, 0.04)!
-    const E = await readBuffer(device, toy.image, 64 * 64 * 4)
     const g = await readBuffer(device, toy.captured.pixelGradient!, 64 * 64 * 4)
     const mean = 0.04 / 0.16
     let gErr = 0, gMax = 0
     for (let j = 0; j < g.length; j++) {
-      // E was overwritten by the step's forward on old heights? Recompute from flat heights: E = mean.
+      // The first forward evaluates the flat lens, where E = mean.
       const ref = 2 * (mean - Tn[j]) / (mean * mean * g.length)
       gErr = Math.max(gErr, Math.abs(ref - g[j])); gMax = Math.max(gMax, Math.abs(ref))
     }
-    void E
     check(gErr / gMax < 1e-5, `${kind}: pixel gradient matches 2(E-T)/(mean^2 N), rel err ${(gErr / gMax).toExponential(2)}`)
 
     // Multi-step batches until done.
@@ -222,6 +223,9 @@ async function main() {
     opt.setTarget(null)
     const r3 = opt.encodeStep(device.createCommandEncoder(), { lens, optics, receiver })
     check(r3.done && r3.lens.heightBuffer === lens.heightBuffer, `${kind}: null target keeps lens, done`)
+    let rejected = false
+    try { opt.setTarget({ ...target, version: 8, width: 0 }) } catch { rejected = true }
+    check(rejected, `${kind}: invalid target rejected before consuming its version`)
     opt.setTarget({ ...target, version: 8 })
     enc = device.createCommandEncoder()
     const r4 = opt.encodeStep(enc, { lens, optics, receiver })
@@ -229,15 +233,23 @@ async function main() {
     check(!r4.done, `${kind}: new version restarts`)
     const hs = await readBuffer(device, r4.lens.heightBuffer, cols * rows * 4)
     check(hs.every((v) => Number.isFinite(v) && v >= settings.minHeight - 1e-9), `${kind}: heights finite and >= minHeight`)
-    opt.destroy()
+    // Step 0 of version 8 queued a readback. Redraw before it is mapped.
+    opt.setTarget({ ...target, version: 9 })
+    await device.queue.onSubmittedWorkDone()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    check(opt.lossHistory.length === 0, `${kind}: a redraw discards loss from the previous target`)
+    opt.destroy(); toy.model.destroy(); input.lens.heightBuffer.destroy()
   }
 
   // 4. No backward -> null.
   const noBackward: ForwardModel = { encode: () => { throw new Error('x') }, destroy() {} }
-  const none = await createLensOptimizer(device, { lens: lensOf(heightsBuffer(device, new Float32Array(81))), optics, receiver }, noBackward)
+  const flat = lensOf(heightsBuffer(device, new Float32Array(81)))
+  const none = await createLensOptimizer(device, { lens: flat, optics, receiver }, noBackward)
   check(none === null, 'returns null when forward has no encodeBackward')
 
+  flat.heightBuffer.destroy()
   await device.queue.onSubmittedWorkDone()
+  device.destroy()
   say(failures === 0 ? 'ALL PASSED' : `${failures} FAILURES`)
   ;(window as any).__done = log
 }

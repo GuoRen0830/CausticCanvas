@@ -179,10 +179,7 @@ fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     return vec4f(color, 1);
   }
   if (frame.mode == 2u || frame.mode == 5u) { return displayColor(light.r, frame.exposure); }
-  let base = textureLoad(albedo, pixel, 0);
-  if (base.a == 0.0) { return vec4f(0.03, 0.18, 0.22, 1); }
-  let n = normalize((textureLoad(normalAndFloor, pixel, 0).xyz * 255.0 - 128.0) / 127.0);
-  let inspection = 0.25 + 0.75 * max(dot(n, frame.inspectionDirection), 0.0);
+  let base = textureLoad(albedo, pixel, 0).rgb;
   let beamDiffuse = vec3f(1.0, 0.78, 0.38) * (light.r / 3.14159265);
-  return vec4f(base.rgb * (vec3f(inspection) + beamDiffuse), 1);
+  return vec4f(base * beamDiffuse, 1);
 }

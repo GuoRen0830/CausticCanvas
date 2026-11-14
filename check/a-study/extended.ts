@@ -88,12 +88,14 @@ export async function extendedChecks(device: GPUDevice) {
     const receivedPower=image.reduce((s,v)=>s+v,0)*input.receiver.sizeX*input.receiver.sizeY/count
     const incidentPower=input.optics.incidentIrradiance*.2*.18
     if(receivedPower>incidentPower+1e-5)throw new Error(c.name+': power gain')
-    // Invalid aliases and resized metadata must be rejected before dispatch.
-    let aliasRejected=false,resizeRejected=false
-    try{model.encodeBackward!(device.createCommandEncoder(),input,result,pg,hb)}catch{aliasRejected=true}
-    try{model.encode(device.createCommandEncoder(),{...input,receiver:{...input.receiver,width:c.width+1}})}catch{resizeRejected=true}
-    if(!aliasRejected||!resizeRejected)throw new Error('Input validation failed')
-    const record={name:c.name,strategy,imageError,beamError,gradientError,transmittedPower,receivedPower,incidentPower,aliasRejected,resizeRejected}
+    // These input contracts are independent of the height field.
+    if (c === cases[0]) {
+      let aliasRejected = false, resizeRejected = false
+      try { model.encodeBackward!(device.createCommandEncoder(), input, result, pg, hb) } catch { aliasRejected = true }
+      try { model.encode(device.createCommandEncoder(), { ...input, receiver: { ...input.receiver, width: c.width+1 } }) } catch { resizeRejected = true }
+      if (!aliasRejected || !resizeRejected) throw new Error('Input validation failed for ' + strategy)
+    }
+    const record={name:c.name,strategy,imageError,beamError,gradientError,transmittedPower,receivedPower,incidentPower}
     records.push(record);console.log('PASS',JSON.stringify(record))
     model.destroy();hb.destroy();pg.destroy();hg.destroy()
   }

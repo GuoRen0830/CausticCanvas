@@ -14,7 +14,7 @@ export async function createForwardModel(
   device: GPUDevice,
   initial: ForwardInput,
   options: OpticsOptions = {},
-): Promise<ForwardModel | null> {
+): Promise<ForwardModel> {
   const strategy = options.strategy ?? 'baseline'
   const cooperative = strategy === 'cooperative' || strategy === 'striped'
   const lanes = strategy === 'striped' ? 8 : 64
