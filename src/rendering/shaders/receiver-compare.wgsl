@@ -1,47 +1,8 @@
-// Integrate the constant irradiance of a triangular footprint over a unit
-// receiver pixel. Clipping in pixel-local coordinates improves precision.
-struct Polygon { points: array<vec2f, 8>, count: u32 }
-
-fn clipEdge(poly: Polygon, axis: u32, bound: f32, keepGreater: bool) -> Polygon {
-  var result: Polygon;
-  if (poly.count == 0u) { return result; }
-  var prev = poly.points[poly.count - 1u];
-  for (var i = 0u; i < poly.count; i++) {
-    let curr = poly.points[i];
-    let prevIn = select(prev[axis] <= bound, prev[axis] >= bound, keepGreater);
-    let currIn = select(curr[axis] <= bound, curr[axis] >= bound, keepGreater);
-    if (prevIn != currIn) {
-      let t = (bound - prev[axis]) / (curr[axis] - prev[axis]);
-      result.points[result.count] = mix(prev, curr, t);
-      result.count++;
-    }
-    if (currIn) {
-      result.points[result.count] = curr;
-      result.count++;
-    }
-    prev = curr;
-  }
-  return result;
-}
-
 @fragment
 fn integrateFS(input: Bounds) -> @location(0) vec4f {
   // Framebuffer row 0 is at the top. Optical row 0 is at the bottom.
   let pixel = vec2f(floor(input.position.x), f32(frame.image.y) - 1.0 - floor(input.position.y));
-  var poly: Polygon;
-  poly.count = 3u;
-  poly.points[0] = input.a - pixel;
-  poly.points[1] = input.b - pixel;
-  poly.points[2] = input.c - pixel;
-  poly = clipEdge(poly, 0u, 0.0, true);
-  poly = clipEdge(poly, 0u, 1.0, false);
-  poly = clipEdge(poly, 1u, 0.0, true);
-  poly = clipEdge(poly, 1u, 1.0, false);
-  var twiceArea = 0.0;
-  for (var i = 1u; i + 1u < poly.count; i++) {
-    twiceArea += cross2(poly.points[i] - poly.points[0], poly.points[i+1u] - poly.points[0]);
-  }
-  let coverage = clamp(0.5 * abs(twiceArea), 0.0, 1.0);
+  let coverage = pixelCoverage(input.a - pixel, input.b - pixel, input.c - pixel);
   return vec4f(coverage * input.irradiance, 0, 0, 0);
 }
 

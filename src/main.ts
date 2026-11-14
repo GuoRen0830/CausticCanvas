@@ -6,6 +6,7 @@ import { createDrawingPad } from './ui/drawing-pad'
 import { createFlatLens } from './geometry/lens-mesh'
 import { createLensRenderer } from './rendering/lens-renderer'
 import { createOrbitCamera } from './rendering/orbit-camera'
+import { buildSceneMesh } from './rendering/scene-mesh'
 import { createSceneRenderer } from './rendering/scene-renderer'
 import { createBeamRenderer } from './rendering/beam-renderer'
 import type { BeamSource, BeamView } from './rendering/beam-renderer'
@@ -24,6 +25,7 @@ async function main() {
   const targetCanvas = document.querySelector('#target-canvas')
   const clearButton = document.querySelector('#clear-target')
   const targetStatus = document.querySelector('#target-status')
+  const methodSelect = document.querySelector('#scene-method')
   const beamSelect = document.querySelector('#beam-view')
   const sourceSelect = document.querySelector('#beam-source')
   const cameraHelp = document.querySelector('#camera-help')
@@ -36,6 +38,7 @@ async function main() {
     !(targetCanvas instanceof HTMLCanvasElement) ||
     !(clearButton instanceof HTMLButtonElement) ||
     !(targetStatus instanceof HTMLElement) ||
+    !(methodSelect instanceof HTMLSelectElement) ||
     !(beamSelect instanceof HTMLSelectElement) ||
     !(sourceSelect instanceof HTMLSelectElement) ||
     !(cameraHelp instanceof HTMLElement)
@@ -178,12 +181,13 @@ async function main() {
 
     const lensView = createLensRenderer(device, format, state.lens, opticalToWorld)
     lensRenderer = lensView
+    const mesh = buildSceneMesh(state.receiver, config.scene.box)
     const sceneView = createSceneRenderer(
-      device, state.receiver, config.scene.box, opticalToWorld,
+      device, state.receiver, config.scene.box, opticalToWorld, mesh,
     )
     sceneRenderer = sceneView
     const beamView = createBeamRenderer(
-      device, format, config.lens, state.receiver, opticalToWorld, config.rendering.causticExposure, config.scene.box,
+      device, format, config.lens, state.receiver, opticalToWorld, config.rendering.causticExposure, config.scene.box, mesh,
     )
     beamRenderer = beamView
     let beamMode: BeamView = 'lit'
@@ -191,7 +195,7 @@ async function main() {
     const viewHelp: Record<BeamView, string> = {
       lit: cameraHelp.textContent ?? '',
       candidates: 'Candidate count · Blue 1 · Cyan 2 · Green 4 · Yellow 16 · Red 64+',
-      footprint: 'Visible floor irradiance after box occlusion',
+      footprint: 'Visible floor irradiance after scene occlusion',
       blocked: 'Floor irradiance intercepted by the box · Brighter means more light blocked',
       plane: 'Unobstructed reference plane · Same texels, orientation and exposure as Caustic result',
       difference: '|Beam irradiance − solver irradiance| · Black = zero at display precision',
@@ -204,9 +208,11 @@ async function main() {
       }
       if (beamSource !== 'solver' && ['plane', 'difference'].includes(beamSelect.value)) beamSelect.value = 'footprint'
       beamMode = beamSelect.value as BeamView
+      methodSelect.disabled = ['plane', 'difference', 'blocked'].includes(beamMode)
       cameraHelp.textContent = viewHelp[beamMode]
       frameLoop?.requestFrame()
     }
+    methodSelect.addEventListener('change', changeView, { signal: events.signal })
     sourceSelect.addEventListener('change', changeView, { signal: events.signal })
     beamSelect.addEventListener('change', changeView, { signal: events.signal })
     const causticView = createCausticDisplay(device, format)
@@ -288,7 +294,7 @@ async function main() {
       sceneView.update(viewProjection)
       beamView.render(
         encoder, context.getCurrentTexture(), viewProjection, beamSource, beamMode, lastResult,
-        sceneView.draw, lensView.draw,
+        sceneView.draw, lensView.draw, methodSelect.value === 'analytic' ? 'analytic' : 'first-hit',
       )
 
       const causticPass = encoder.beginRenderPass({

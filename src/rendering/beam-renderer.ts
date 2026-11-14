@@ -1,13 +1,20 @@
 import { mat4, vec3 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
 import type { CausticImage, ForwardResult, ReceiverPlane } from '../contracts'
-import type { SceneBox } from './scene-renderer'
+import { buildSceneMesh } from './scene-mesh'
+import type { SceneBox } from './scene-mesh'
+import { createHitTracer } from './hit-tracer'
+import commonShader from './shaders/beam-common.wgsl?raw'
+import coverageShader from './shaders/pixel-coverage.wgsl?raw'
+import traceShader from './shaders/first-hit.wgsl?raw'
+import splatShader from './shaders/hit-splat.wgsl?raw'
 import { createTestBeams } from './test-beams'
 import beamShader from './shaders/beam.wgsl?raw'
 import receiverShader from './shaders/receiver-compare.wgsl?raw'
 import displayColor from './shaders/irradiance-display.wgsl?raw'
 
 export type BeamSource = 'solver' | 'single' | 'pair'
+export type SceneMethod = 'first-hit' | 'analytic'
 export type BeamView = 'lit' | 'candidates' | 'footprint' | 'plane' | 'difference' | 'blocked'
 const modeId = { lit: 0, candidates: 1, footprint: 2, plane: 3, difference: 4, blocked: 5 }
 
@@ -19,6 +26,7 @@ export function createBeamRenderer(
   device: GPUDevice, canvasFormat: GPUTextureFormat,
   aperture: { sizeX: number; sizeY: number; thickness: number },
   receiver: ReceiverPlane, opticalToWorld: Mat4, exposure: number, box: SceneBox,
+  mesh = buildSceneMesh(receiver, box),
 ) {
   const tests = createTestBeams(device, aperture)
   const data = new Float32Array(60)
@@ -34,7 +42,7 @@ export function createBeamRenderer(
     label: 'Beam frame', size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   const module = device.createShaderModule({
-    label: 'Beam rendering and plane comparison', code: [displayColor, beamShader, receiverShader].join('\n'),
+    label: 'Beam rendering and plane comparison', code: [displayColor, commonShader, coverageShader, beamShader, receiverShader, traceShader, splatShader].join('\n'),
   })
   const fieldLayout = device.createBindGroupLayout({
     entries: [0, 1].map(binding => ({
@@ -51,20 +59,40 @@ export function createBeamRenderer(
     { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
     { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
   ])
+  const splatFrame = frameLayout([
+    { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
+    { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+    { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } },
+  ])
+  const tracer = createHitTracer(device, module, uniform, mesh)
   const planeLayout = frameLayout([])
   const add: GPUBlendComponent = { srcFactor: 'one', dstFactor: 'one', operation: 'add' }
-  function beamPipeline(label: string, layout: GPUBindGroupLayout, entryPoint: string) {
+  // Dense subpixel footprints can contribute hundreds of small terms per pixel.
+  const screenFormat = device.features.has('float32-blendable') ? 'rg32float' : 'rg16float'
+  function beamPipeline(label: string, layout: GPUBindGroupLayout, entryPoint: string, format: GPUTextureFormat) {
     return device.createRenderPipeline({
       label, layout: device.createPipelineLayout({ bindGroupLayouts: [layout, fieldLayout] }),
       vertex: { module, entryPoint: 'boundsVS' },
-      fragment: { module, entryPoint, targets: [{ format: 'rg16float', blend: { color: add, alpha: add } }] },
+      fragment: { module, entryPoint, targets: [{ format, blend: { color: add, alpha: add } }] },
       primitive: { topology: 'triangle-strip' },
     })
   }
-  const accumulate = beamPipeline('Accumulate visible scene beams', sceneLayout, 'accumulateFS')
-  const integrate = beamPipeline('Integrate receiver texels', planeLayout, 'integrateFS')
+  const accumulate = beamPipeline('Accumulate visible scene beams', sceneLayout, 'accumulateFS', screenFormat)
+  const integrate = beamPipeline('Integrate receiver texels', planeLayout, 'integrateFS', 'rg16float')
+  const splat = device.createRenderPipeline({
+    label: 'Local first-hit footprints',
+    layout: device.createPipelineLayout({ bindGroupLayouts: [splatFrame, fieldLayout, tracer.splatLayout] }),
+    vertex: { module, entryPoint: 'splatVS' },
+    fragment: { module, entryPoint: 'splatFS', targets: [{ format: screenFormat, blend: { color: add, alpha: add } }] },
+    primitive: { topology: 'triangle-strip' },
+  })
+  const compositeLayout = frameLayout([
+    { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+    { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+    { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
+  ])
   const composite = device.createRenderPipeline({
-    label: 'Scene composite', layout: 'auto', vertex: { module, entryPoint: 'fullscreenVS' },
+    label: 'Scene composite', layout: device.createPipelineLayout({ bindGroupLayouts: [compositeLayout] }), vertex: { module, entryPoint: 'fullscreenVS' },
     fragment: { module, entryPoint: 'compositeFS', targets: [{ format: canvasFormat }] },
     depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' },
   })
@@ -79,21 +107,26 @@ export function createBeamRenderer(
   function screenTargets(width: number, height: number) {
     const albedo = texture('Scene albedo and occupancy', 'rgba8unorm', width, height)
     const normal = texture('Optical-local normal and floor mask', 'rgba8unorm', width, height)
+    const object = texture('Visible object and geometric normal', 'rg32uint', width, height)
     const depth = texture('Scene depth', 'depth24plus', width, height)
-    const light = texture('Beam irradiance and candidate count', 'rg16float', width, height)
+    const light = texture('Beam irradiance and candidate count', screenFormat, width, height)
     const albedoView = albedo.createView(), normalView = normal.createView()
     const depthView = depth.createView(), lightView = light.createView()
+    const objectView = object.createView()
     const normalEntry = { binding: 2, resource: normalView }
     const beamGroup = device.createBindGroup({
       layout: sceneLayout, entries: [uniformEntry, { binding: 1, resource: depthView }, normalEntry],
     })
+    const splatGroup = device.createBindGroup({ layout: splatFrame, entries: [
+      uniformEntry, { binding: 1, resource: depthView }, normalEntry, { binding: 5, resource: objectView },
+    ] })
     const compositeGroup = device.createBindGroup({
       layout: composite.getBindGroupLayout(0),
       entries: [uniformEntry, normalEntry, { binding: 3, resource: albedoView }, { binding: 4, resource: lightView }],
     })
     return {
-      width, height, albedoView, normalView, depthView, lightView, beamGroup, compositeGroup,
-      destroy() { for (const t of [albedo, normal, depth, light]) t.destroy() },
+      width, height, albedoView, normalView, depthView, lightView, objectView, beamGroup, splatGroup, compositeGroup,
+      destroy() { for (const t of [albedo, normal, object, depth, light]) t.destroy() },
     }
   }
 
@@ -139,6 +172,7 @@ export function createBeamRenderer(
       encoder: GPUCommandEncoder, output: GPUTexture, viewProjection: Mat4,
       source: BeamSource, mode: BeamView, result: ForwardResult | null,
       drawScene: (pass: GPURenderPassEncoder) => void, drawLens: (pass: GPURenderPassEncoder) => void,
+      method: SceneMethod = 'first-hit',
     ) {
       const compare = mode === 'plane' || mode === 'difference'
       if ((compare || source === 'solver') && !result) throw new Error('Missing forward result for beam rendering.')
@@ -167,6 +201,7 @@ export function createBeamRenderer(
       data[44] = r.z
       words[45] = modeId[mode]
       data[46] = exposure
+      words[47] = count
       device.queue.writeBuffer(uniform, 0, data)
 
       if (compare) {
@@ -196,16 +231,21 @@ export function createBeamRenderer(
         screen = screenTargets(output.width, output.height)
       }
       const geometry = encoder.beginRenderPass({
-        label: 'Scene G-buffer', colorAttachments: [clear(screen.albedoView), clear(screen.normalView)],
+        label: 'Scene G-buffer', colorAttachments: [clear(screen.albedoView), clear(screen.normalView), clear(screen.objectView)],
         depthStencilAttachment: { view: screen.depthView, depthLoadOp: 'clear', depthClearValue: 1, depthStoreOp: 'store' },
       })
       drawScene(geometry)
       geometry.end()
 
-      const pass = encoder.beginRenderPass({ label: 'Accumulate beams', colorAttachments: [clear(screen.lightView)] })
-      pass.setPipeline(accumulate)
-      pass.setBindGroup(0, screen.beamGroup)
+      const firstHit = method === 'first-hit' && mode !== 'blocked'
+      const cached = firstHit ? tracer.update(encoder, field, count, source === 'solver' ? result! : tests.field) : null
+      const pass = encoder.beginRenderPass({
+        label: cached ? 'Splat first hits' : 'Accumulate beams', colorAttachments: [clear(screen.lightView)],
+      })
+      pass.setPipeline(cached ? splat : accumulate)
+      pass.setBindGroup(0, cached ? screen.splatGroup : screen.beamGroup)
       pass.setBindGroup(1, boundField.group)
+      if (cached) pass.setBindGroup(2, cached.group)
       pass.draw(4, count)
       pass.end()
 
@@ -222,6 +262,7 @@ export function createBeamRenderer(
     destroy() {
       screen?.destroy()
       plane?.destroy()
+      tracer.destroy()
       tests.destroy()
       uniform.destroy()
     },

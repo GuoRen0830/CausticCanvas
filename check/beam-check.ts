@@ -6,6 +6,7 @@ import { createSceneRenderer } from '../src/rendering/scene-renderer'
 import type { BeamSource, BeamView } from '../src/rendering/beam-renderer'
 import type { ForwardResult } from '../src/contracts'
 import { checkSceneOcclusion } from './scene-occlusion'
+import { checkFirstHits } from './first-hit-check'
 
 // Use the production geometry, optical solver, accumulation and comparison passes.
 // Float output at low exposure retains enough precision to invert the display map.
@@ -39,7 +40,7 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
   async function readView(source: BeamSource, mode: BeamView, camera = vp) {
     const encoder = device.createCommandEncoder()
     scene.update(camera)
-    beam.render(encoder, output, camera, source, mode, result, scene.draw, blank)
+    beam.render(encoder, output, camera, source, mode, result, scene.draw, blank, 'analytic')
     encoder.copyTextureToBuffer({ texture: output }, { buffer: staging, bytesPerRow: width * 16 }, [width, height])
     device.queue.submit([encoder.finish()])
     await staging.mapAsync(GPUMapMode.READ)
@@ -136,6 +137,7 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
     input.optics.incidentIrradiance = 0
     await compare('zero flux', evaluate(), 0.001)
     require((await readView('solver', 'footprint')).every(v => v === 0), 'Stale screen illumination')
+    await checkFirstHits(device, report)
   } finally {
     staging.destroy(); output.destroy(); beam.destroy(); scene.destroy(); forward.destroy(); lens.heightBuffer.destroy()
   }

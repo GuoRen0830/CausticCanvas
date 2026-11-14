@@ -9,7 +9,9 @@ export async function initializeGPU(canvas: HTMLCanvasElement) {
     throw new Error('No GPU adapter available.')
   }
 
-  const device = await adapter.requestDevice()
+  const device = await adapter.requestDevice({
+    requiredFeatures: adapter.features.has('float32-blendable') ? ['float32-blendable'] : [],
+  })
   const context = canvas.getContext('webgpu')
 
   if (!context) {
