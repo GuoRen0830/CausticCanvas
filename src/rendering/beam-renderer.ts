@@ -65,20 +65,15 @@ export function createBeamRenderer(
     { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } },
   ])
   const tracer = createHitTracer(device, module, uniform, mesh)
-  const planeLayout = frameLayout([])
   const add: GPUBlendComponent = { srcFactor: 'one', dstFactor: 'one', operation: 'add' }
   // Dense subpixel footprints can contribute hundreds of small terms per pixel.
   const screenFormat = device.features.has('float32-blendable') ? 'rg32float' : 'rg16float'
-  function beamPipeline(label: string, layout: GPUBindGroupLayout, entryPoint: string, format: GPUTextureFormat) {
-    return device.createRenderPipeline({
-      label, layout: device.createPipelineLayout({ bindGroupLayouts: [layout, fieldLayout] }),
-      vertex: { module, entryPoint: 'boundsVS' },
-      fragment: { module, entryPoint, targets: [{ format, blend: { color: add, alpha: add } }] },
-      primitive: { topology: 'triangle-strip' },
-    })
-  }
-  const accumulate = beamPipeline('Accumulate visible scene beams', sceneLayout, 'accumulateFS', screenFormat)
-  const integrate = beamPipeline('Integrate receiver texels', planeLayout, 'integrateFS', 'rg16float')
+  const accumulate = device.createRenderPipeline({
+    label: 'Accumulate visible scene beams', layout: device.createPipelineLayout({ bindGroupLayouts: [sceneLayout, fieldLayout] }),
+    vertex: { module, entryPoint: 'boundsVS' },
+    fragment: { module, entryPoint: 'accumulateFS', targets: [{ format: screenFormat, blend: { color: add, alpha: add } }] },
+    primitive: { topology: 'triangle-strip' },
+  })
   const splat = device.createRenderPipeline({
     label: 'Local first-hit footprints',
     layout: device.createPipelineLayout({ bindGroupLayouts: [splatFrame, fieldLayout, tracer.splatLayout] }),
@@ -97,7 +92,6 @@ export function createBeamRenderer(
     depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' },
   })
   const uniformEntry = { binding: 0, resource: { buffer: uniform } }
-  const integrateGroup = device.createBindGroup({ layout: planeLayout, entries: [uniformEntry] })
   function texture(label: string, format: GPUTextureFormat, width: number, height: number) {
     return device.createTexture({
       label, format, size: [width, height],
@@ -132,9 +126,61 @@ export function createBeamRenderer(
 
   function planeTargets(image: CausticImage) {
     const { width, height, kind } = image
-    const light = texture('Integrated receiver irradiance', 'rg16float', width, height)
+    // Blend in f32. Devices without float blending sum positive contributions
+    // with f32 compare/exchange, then copy the bits into the same display texture.
+    const nativeBlend = device.features.has('float32-blendable')
+    const rowWords = Math.ceil(width / 64) * 64 // copyBufferToTexture requires aligned rows.
+    const light = device.createTexture({
+      label: 'Integrated receiver irradiance', format: 'r32float', size: [width, height],
+      usage: GPUTextureUsage.TEXTURE_BINDING | (nativeBlend ? GPUTextureUsage.RENDER_ATTACHMENT : GPUTextureUsage.COPY_DST),
+    })
     const view = light.createView()
-    const sampled = frameLayout([{ binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} }])
+    const sampled = frameLayout([{ binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } }])
+    const sums = nativeBlend ? null : device.createBuffer({
+      label: 'Receiver f32 sums', size: rowWords * height * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    })
+    const integrate = nativeBlend
+      ? device.createRenderPipeline({ label: 'Integrate receiver texels', layout: 'auto',
+        vertex: { module, entryPoint: 'boundsVS' },
+        fragment: { module, entryPoint: 'integrateFS', targets: [{ format: 'r32float', blend: { color: add, alpha: add } }] },
+        primitive: { topology: 'triangle-strip' } })
+      : device.createComputePipeline({ label: 'Integrate receiver texels', layout: 'auto', compute: { module, entryPoint: 'integrateCS' } })
+    const frameGroup = device.createBindGroup({ layout: integrate.getBindGroupLayout(0),
+      entries: sums ? [uniformEntry, { binding: 6, resource: { buffer: sums } }] : [uniformEntry] })
+    let planeField: { heights: GPUBuffer; beams: GPUBuffer; group: GPUBindGroup } | undefined
+    let lastResult: ForwardResult | undefined
+    function accumulate(encoder: GPUCommandEncoder, result: ForwardResult, count: number) {
+      // Plane irradiance does not depend on the camera or the comparison view.
+      if (lastResult === result) return
+      const { buffer, lens } = result.beams
+      if (planeField?.heights !== lens.heightBuffer || planeField.beams !== buffer) {
+        planeField = { heights: lens.heightBuffer, beams: buffer,
+          group: device.createBindGroup({ layout: integrate.getBindGroupLayout(1), entries: [
+            { binding: 0, resource: { buffer: lens.heightBuffer } }, { binding: 1, resource: { buffer } },
+          ] }) }
+      }
+      if (sums) {
+        encoder.clearBuffer(sums)
+        const pass = encoder.beginComputePass({ label: 'Receiver pixel integration' })
+        pass.setPipeline(integrate as GPUComputePipeline)
+        pass.setBindGroup(0, frameGroup)
+        pass.setBindGroup(1, planeField.group)
+        const groups = Math.ceil(count / 64)
+        const x = Math.min(groups, device.limits.maxComputeWorkgroupsPerDimension)
+        pass.dispatchWorkgroups(x, Math.ceil(groups / x))
+        pass.end()
+        encoder.copyBufferToTexture({ buffer: sums, bytesPerRow: rowWords * 4 }, { texture: light }, [width, height])
+      } else {
+        const pass = encoder.beginRenderPass({ label: 'Receiver pixel integration', colorAttachments: [clear(view)] })
+        pass.setPipeline(integrate as GPURenderPipeline)
+        pass.setBindGroup(0, frameGroup)
+        pass.setBindGroup(1, planeField.group)
+        pass.draw(4, count)
+        pass.end()
+      }
+      lastResult = result
+    }
     const imageLayout = device.createBindGroupLayout({ entries: [kind === 'buffer'
       ? { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } }
       : { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
@@ -160,7 +206,7 @@ export function createBeamRenderer(
       }
       return bound
     }
-    return { width, height, kind, view, display, group, reference, destroy() { light.destroy() } }
+    return { width, height, kind, accumulate, display, group, reference, destroy() { light.destroy(); sums?.destroy() } }
   }
 
   let screen: ReturnType<typeof screenTargets> | undefined
@@ -210,12 +256,7 @@ export function createBeamRenderer(
           plane?.destroy()
           plane = planeTargets(image)
         }
-        const pass = encoder.beginRenderPass({ label: 'Receiver pixel integration', colorAttachments: [clear(plane.view)] })
-        pass.setPipeline(integrate)
-        pass.setBindGroup(0, integrateGroup)
-        pass.setBindGroup(1, boundField.group)
-        pass.draw(4, count)
-        pass.end()
+        plane.accumulate(encoder, result!, count)
 
         const show = encoder.beginRenderPass({ label: 'Plane comparison', colorAttachments: [clear(output.createView())] })
         show.setPipeline(plane.display)

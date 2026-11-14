@@ -33,8 +33,9 @@ export function buildSceneBvh(mesh: SceneMesh) {
       bounds[6 * face + 3 + axis] = Math.max(a, b, c)
       centers[3 * face + axis] = (a + b + c) / 3
       floats[12 * face + axis] = a
-      floats[12 * face + 4 + axis] = b - a
-      floats[12 * face + 8 + axis] = c - a
+      // Preserve identical shared vertices for the ray-space edge tests.
+      floats[12 * face + 4 + axis] = b
+      floats[12 * face + 8 + axis] = c
     }
     words[face * 12 + 3] = object
     words[face * 12 + 7] = face

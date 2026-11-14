@@ -11,6 +11,14 @@ struct Bounds {
   @location(6) @interpolate(flat) sourceDepthGradient: vec3f,
 }
 
+fn receiverXY(s: vec3f, d: vec3f) -> vec2f {
+  return s.xy + ((frame.receiverZ - s.z) / d.z) * d.xy;
+}
+
+fn receiverPixel(xy: vec2f) -> vec2f {
+  return (xy / frame.receiverSize + 0.5) * vec2f(frame.image);
+}
+
 @vertex
 fn boundsVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u32) -> Bounds {
   var out: Bounds;
@@ -28,10 +36,9 @@ fn boundsVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u
   for (var j = 0u; j < 3u; j++) {
     let s = sourceVertex(ids[j]);
     sources[j] = s;
-    let t = (frame.receiverZ - s.z) / ray.z;
-    if (!(t > 0.0)) { return out; }
-    let foot = s.xy + t * ray.xy;
-    corners[j] = (foot / frame.receiverSize + 0.5) * vec2f(frame.image);
+    if (!(frame.receiverZ > s.z)) { return out; }
+    let foot = receiverXY(s, ray.xyz);
+    corners[j] = receiverPixel(foot);
     if (planeView) {
       let ndc = 2.0 * foot / frame.receiverSize;
       lo = min(lo, ndc);

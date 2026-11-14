@@ -108,6 +108,35 @@ export async function checkFirstHits(device: GPUDevice, report: (line: string) =
     if (totals.some(n => n < 10)) throw new Error('Insufficient fixture coverage')
     report('PASS ' + count + ' BVH rays vs CPU, misses/far/sloped ' + totals.join('/') + ', max distance error ' + maxError.toExponential(2) + ' m')
 
+    // Every ray passes deep inside the diamond but within a few ulps of
+    // the diagonal shared by its triangles. A miss here leaks light.
+    const diamond = [[1,0], [0,1], [-1,0], [0,-1]]
+    const seam = createHitTracer(device, shader, uniform, {
+      vertices: new Float32Array(diamond.flatMap(([x,y]) => [x,y,0.5, 0,0,-1, 1,1,1, 1,1])),
+      indices: new Uint32Array([0,2,1,0,3,2]),
+    })
+    try {
+      for (let i = 0; i < count; i++) {
+        const row = Math.floor(Math.floor(i/2) / (lens.columns-1))
+        const y = ((row + (1 + i%2)/3) / (lens.rows-1) - 0.5) * lens.sizeY
+        const d = vec3.normalize([0.15 * Math.sin(11*i), -y / (0.5 - spec.thickness), 1])
+        rays.set([...d, 1], 4*i)
+      }
+      device.queue.writeBuffer(buffer, 0, rays)
+      const e = device.createCommandEncoder()
+      e.copyBufferToBuffer(seam.update(e, field, count, {}).buffer, 0, read, 0, count*8)
+      device.queue.submit([e.finish()])
+      await read.mapAsync(GPUMapMode.READ)
+      const seamData = read.getMappedRange().slice(0, count*8)
+      read.unmap()
+      const seamFaces = new Uint32Array(seamData), seamDistances = new Float32Array(seamData)
+      for (let i = 0; i < count; i++) {
+        if (!seamFaces[2*i]) throw new Error('Ray escaped through an internal edge at beam ' + i)
+        near(seamDistances[2*i+1], (0.5 - spec.thickness) / rays[4*i+2], 2e-6, 'Shared-edge distance')
+      }
+      report('PASS all ' + count + ' internal-edge rays hit the continuous surface')
+    } finally { seam.destroy() }
+
     // Vertical beams deliver 1 W/m2 to a flat surface. The tilted panel
     // receives its cosine-scaled share, and its shadow is seen by a sheared camera.
     const flux = spec.sizeX * spec.sizeY / count

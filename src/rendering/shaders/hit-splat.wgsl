@@ -20,7 +20,7 @@ fn splatVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u3
   let hit = cachedHits[face];
   if (hit.trianglePlusOne == 0u) { return out; }
   let tri = triangles[hit.trianglePlusOne - 1u];
-  let n = normalize(cross(tri.ab, tri.ac));
+  let n = normalize(cross(tri.b - tri.a, tri.c - tri.a));
   let ray = beams[face];
   let incidence = -dot(n, ray.xyz);
   if (!(incidence > 1e-7)) { return out; }

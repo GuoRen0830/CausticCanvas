@@ -137,6 +137,23 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
     input.optics.incidentIrradiance = 0
     await compare('zero flux', evaluate(), 0.001)
     require((await readView('solver', 'footprint')).every(v => v === 0), 'Stale screen illumination')
+    // One aperture-sized receiver texel receives 8192 equal contributions.
+    // f16 blending stalls at 0.25 even though the correct sum is 1 W/m2.
+    const denseSpec = { ...lensSpec, columns: 65, rows: 65 }
+    const smallReceiver = { ...receiver, sizeX: lensSpec.sizeX, sizeY: lensSpec.sizeY, width: 1, height: 1 }
+    const denseLens = createFlatLens(device, denseSpec)
+    const denseInput = { lens: denseLens, receiver: smallReceiver, optics: { ...input.optics, incidentIrradiance: 1 } }
+    const referenceModel = (await createForwardModel(device, denseInput))!
+    try {
+      const encoder = device.createCommandEncoder()
+      result = referenceModel.encode(encoder, denseInput)
+      device.queue.submit([encoder.finish()])
+      const center = Math.floor(height/2)*width + Math.floor(width/2)
+      const reconstructed = (await readView('solver', 'plane'))[center]
+      const residual = (await readView('solver', 'difference'))[center]
+      require(Math.abs(reconstructed - 1) < 0.0001 && residual < 0.0001, 'Dense receiver f32 accumulation')
+      report('PASS 8192 subpixel beams in one receiver texel, E = ' + reconstructed.toFixed(6) + ' W/m2')
+    } finally { referenceModel.destroy(); denseLens.heightBuffer.destroy() }
     await checkFirstHits(device, report)
   } finally {
     staging.destroy(); output.destroy(); beam.destroy(); scene.destroy(); forward.destroy(); lens.heightBuffer.destroy()
