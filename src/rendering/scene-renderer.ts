@@ -20,12 +20,12 @@ function buildSceneMesh(receiver: ReceiverPlane, box: SceneBox) {
     throw new Error('Scene positions must be finite.')
   }
 
-  // Interleaved position, flat normal, and base color: 9 floats per vertex.
+  // Interleaved position, flat normal, base color, and floor flag: 10 floats.
   const vertices: number[] = []
   const indices: number[] = []
 
-  const addQuad = (center: Triple, u: Triple, v: Triple, color: Triple) => {
-    const first = vertices.length / 9
+  const addQuad = (center: Triple, u: Triple, v: Triple, color: Triple, isFloor = false) => {
+    const first = vertices.length / 10
     const normal = vec3.normalize(vec3.cross(u, v))
     // u and v are half-edge vectors; u cross v determines the front face.
     for (const [s, t] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
@@ -34,7 +34,7 @@ function buildSceneMesh(receiver: ReceiverPlane, box: SceneBox) {
         center[1] + s * u[1] + t * v[1],
         center[2] + s * u[2] + t * v[2],
         normal[0], normal[1], normal[2],
-        ...color,
+        ...color, Number(isFloor),
       )
     }
     indices.push(first, first + 1, first + 2, first, first + 2, first + 3)
@@ -46,6 +46,7 @@ function buildSceneMesh(receiver: ReceiverPlane, box: SceneBox) {
     [receiver.sizeX / 2, 0, 0],
     [0, -receiver.sizeY / 2, 0],
     [0.48, 0.52, 0.58],
+    true,
   )
 
   const [x, y, z] = box.center
@@ -68,7 +69,6 @@ function buildSceneMesh(receiver: ReceiverPlane, box: SceneBox) {
 
 export function createSceneRenderer(
   device: GPUDevice,
-  format: GPUTextureFormat,
   receiver: ReceiverPlane,
   box: SceneBox,
   model: Mat4,
@@ -107,18 +107,20 @@ export function createSceneRenderer(
       module,
       entryPoint: 'vertexMain',
       buffers: [{
-        arrayStride: 36,
+        arrayStride: 40,
         attributes: [
           { shaderLocation: 0, offset: 0, format: 'float32x3' },
           { shaderLocation: 1, offset: 12, format: 'float32x3' },
           { shaderLocation: 2, offset: 24, format: 'float32x3' },
+          { shaderLocation: 3, offset: 36, format: 'float32' },
         ],
       }],
     },
     fragment: {
       module,
       entryPoint: 'fragmentMain',
-      targets: [{ format }],
+      // Base color + occupancy, world normal + floor receiver mask.
+      targets: [{ format: 'rgba8unorm' }, { format: 'rgba8unorm' }],
     },
     primitive: {
       topology: 'triangle-list',

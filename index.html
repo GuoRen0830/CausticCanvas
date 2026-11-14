@@ -34,6 +34,13 @@
         </aside>
 
         <section id="viewport">
+          <label id="beam-control">Test beam
+            <select id="beam-view">
+              <option value="lit">Lit scene</option>
+              <option value="candidates">Candidate pixels</option>
+              <option value="footprint">Floor footprint</option>
+            </select>
+          </label>
           <canvas
             id="gpu-canvas"
             aria-label="Interactive scene preview"

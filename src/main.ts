@@ -7,6 +7,8 @@ import { createFlatLens } from './geometry/lens-mesh'
 import { createLensRenderer } from './rendering/lens-renderer'
 import { createOrbitCamera } from './rendering/orbit-camera'
 import { createSceneRenderer } from './rendering/scene-renderer'
+import { createSingleBeamRenderer } from './rendering/single-beam-renderer'
+import type { BeamView } from './rendering/single-beam-renderer'
 import { createCausticDisplay } from './rendering/caustic-display'
 import { createFrameLoop } from './frame-loop'
 import { createSimulation } from './simulation'
@@ -22,6 +24,7 @@ async function main() {
   const targetCanvas = document.querySelector('#target-canvas')
   const clearButton = document.querySelector('#clear-target')
   const targetStatus = document.querySelector('#target-status')
+  const beamSelect = document.querySelector('#beam-view')
 
   if (
     !(canvas instanceof HTMLCanvasElement) ||
@@ -30,7 +33,8 @@ async function main() {
     !(causticStatusElement instanceof HTMLElement) ||
     !(targetCanvas instanceof HTMLCanvasElement) ||
     !(clearButton instanceof HTMLButtonElement) ||
-    !(targetStatus instanceof HTMLElement)
+    !(targetStatus instanceof HTMLElement) ||
+    !(beamSelect instanceof HTMLSelectElement)
   ) {
     throw new Error('Missing application controls.')
   }
@@ -44,7 +48,7 @@ async function main() {
   let hasTarget = false
   let optimizationDone = false
   let initialHeightBuffer: GPUBuffer | null = null
-  let depthTexture: GPUTexture | null = null
+  let beamRenderer: ReturnType<typeof createSingleBeamRenderer> | null = null
   let forward: ForwardModel | null = null
   let optimizer: LensOptimizer | null = null
   let lastResult: ForwardResult | null = null
@@ -72,7 +76,7 @@ async function main() {
       causticDisplay?.destroy()
       optimizer?.destroy()
       forward?.destroy()
-      depthTexture?.destroy()
+      beamRenderer?.destroy()
       initialHeightBuffer?.destroy()
     } finally {
       device.destroy()
@@ -171,9 +175,21 @@ async function main() {
     const lensView = createLensRenderer(device, format, state.lens, opticalToWorld)
     lensRenderer = lensView
     const sceneView = createSceneRenderer(
-      device, format, state.receiver, config.scene.box, opticalToWorld,
+      device, state.receiver, config.scene.box, opticalToWorld,
     )
     sceneRenderer = sceneView
+    const beamView = createSingleBeamRenderer(
+      device, format, config.lens, state.receiver.z, opticalToWorld,
+    )
+    beamRenderer = beamView
+    let beamMode: BeamView = 'lit'
+    beamSelect.addEventListener('change', () => {
+      const mode = beamSelect.value
+      if (mode === 'lit' || mode === 'candidates' || mode === 'footprint') {
+        beamMode = mode
+        frameLoop?.requestFrame()
+      }
+    }, { signal: events.signal })
     const causticView = createCausticDisplay(device, format)
     causticDisplay = causticView
     causticView.setExposure(config.rendering.causticExposure)
@@ -238,40 +254,18 @@ async function main() {
         Math.max(1, Math.round(canvas.clientHeight * pixelRatio)),
       )
 
-      if (!depthTexture || canvas.width !== width || canvas.height !== height) {
+      if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width
         canvas.height = height
-        depthTexture?.destroy()
-        depthTexture = device.createTexture({
-          label: 'Viewport depth',
-          size: [width, height],
-          format: 'depth24plus',
-          usage: GPUTextureUsage.RENDER_ATTACHMENT,
-        })
       }
 
       // Bind the geometry that produced the displayed caustic image.
       const viewProjection = orbitCamera.update(width / height)
       lensView.update(lastResult?.beams.lens ?? state.lens, viewProjection)
       sceneView.update(viewProjection)
-      const pass = encoder.beginRenderPass({
-        colorAttachments: [{
-          view: context.getCurrentTexture().createView(),
-          clearValue: { r: 0.03, g: 0.18, b: 0.22, a: 1 },
-          loadOp: 'clear',
-          storeOp: 'store',
-        }],
-        depthStencilAttachment: {
-          view: depthTexture.createView(),
-          depthClearValue: 1,
-          depthLoadOp: 'clear',
-          depthStoreOp: 'discard',
-        },
-      })
-      // One shared depth attachment resolves visibility across both pipelines.
-      sceneView.draw(pass)
-      lensView.draw(pass)
-      pass.end()
+      beamView.render(
+        encoder, context.getCurrentTexture(), viewProjection, beamMode, sceneView.draw, lensView.draw,
+      )
 
       const causticPass = encoder.beginRenderPass({
         label: 'Caustic preview',
