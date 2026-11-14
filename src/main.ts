@@ -7,8 +7,8 @@ import { createFlatLens } from './geometry/lens-mesh'
 import { createLensRenderer } from './rendering/lens-renderer'
 import { createOrbitCamera } from './rendering/orbit-camera'
 import { createSceneRenderer } from './rendering/scene-renderer'
-import { createSingleBeamRenderer } from './rendering/single-beam-renderer'
-import type { BeamView } from './rendering/single-beam-renderer'
+import { createBeamRenderer } from './rendering/beam-renderer'
+import type { BeamSource, BeamView } from './rendering/beam-renderer'
 import { createCausticDisplay } from './rendering/caustic-display'
 import { createFrameLoop } from './frame-loop'
 import { createSimulation } from './simulation'
@@ -25,6 +25,8 @@ async function main() {
   const clearButton = document.querySelector('#clear-target')
   const targetStatus = document.querySelector('#target-status')
   const beamSelect = document.querySelector('#beam-view')
+  const sourceSelect = document.querySelector('#beam-source')
+  const cameraHelp = document.querySelector('#camera-help')
 
   if (
     !(canvas instanceof HTMLCanvasElement) ||
@@ -34,7 +36,9 @@ async function main() {
     !(targetCanvas instanceof HTMLCanvasElement) ||
     !(clearButton instanceof HTMLButtonElement) ||
     !(targetStatus instanceof HTMLElement) ||
-    !(beamSelect instanceof HTMLSelectElement)
+    !(beamSelect instanceof HTMLSelectElement) ||
+    !(sourceSelect instanceof HTMLSelectElement) ||
+    !(cameraHelp instanceof HTMLElement)
   ) {
     throw new Error('Missing application controls.')
   }
@@ -48,7 +52,7 @@ async function main() {
   let hasTarget = false
   let optimizationDone = false
   let initialHeightBuffer: GPUBuffer | null = null
-  let beamRenderer: ReturnType<typeof createSingleBeamRenderer> | null = null
+  let beamRenderer: ReturnType<typeof createBeamRenderer> | null = null
   let forward: ForwardModel | null = null
   let optimizer: LensOptimizer | null = null
   let lastResult: ForwardResult | null = null
@@ -178,18 +182,32 @@ async function main() {
       device, state.receiver, config.scene.box, opticalToWorld,
     )
     sceneRenderer = sceneView
-    const beamView = createSingleBeamRenderer(
-      device, format, config.lens, state.receiver.z, opticalToWorld,
+    const beamView = createBeamRenderer(
+      device, format, config.lens, state.receiver, opticalToWorld, config.rendering.causticExposure,
     )
     beamRenderer = beamView
     let beamMode: BeamView = 'lit'
-    beamSelect.addEventListener('change', () => {
-      const mode = beamSelect.value
-      if (mode === 'lit' || mode === 'candidates' || mode === 'footprint') {
-        beamMode = mode
-        frameLoop?.requestFrame()
+    let beamSource: BeamSource = 'solver'
+    const viewHelp: Record<BeamView, string> = {
+      lit: cameraHelp.textContent ?? '',
+      candidates: 'Candidate count · Blue 1 · Cyan 2 · Green 4 · Yellow 16 · Red 64+',
+      footprint: 'Visible floor irradiance · Same exposure as Caustic result',
+      plane: 'Floor only · Same texels, orientation and exposure as Caustic result',
+      difference: '|Beam irradiance − solver irradiance| · Black = zero at display precision',
+    }
+    const changeView = () => {
+      const source = sourceSelect.value
+      if (source === 'single' || source === 'pair' || source === 'solver') beamSource = source
+      for (const value of ['plane', 'difference']) {
+        beamSelect.querySelector<HTMLOptionElement>(`option[value="${value}"]`)!.disabled = beamSource !== 'solver'
       }
-    }, { signal: events.signal })
+      if (beamSource !== 'solver' && ['plane', 'difference'].includes(beamSelect.value)) beamSelect.value = 'footprint'
+      beamMode = beamSelect.value as BeamView
+      cameraHelp.textContent = viewHelp[beamMode]
+      frameLoop?.requestFrame()
+    }
+    sourceSelect.addEventListener('change', changeView, { signal: events.signal })
+    beamSelect.addEventListener('change', changeView, { signal: events.signal })
     const causticView = createCausticDisplay(device, format)
     causticDisplay = causticView
     causticView.setExposure(config.rendering.causticExposure)
@@ -222,7 +240,11 @@ async function main() {
       await causticView.prepare(lastResult.caustic.kind)
       if (disposed) return
       causticView.setImage(lastResult.caustic)
+    } else {
+      sourceSelect.querySelector<HTMLOptionElement>('option[value="solver"]')!.disabled = true
+      sourceSelect.value = 'single'
     }
+    changeView()
 
     const encodeFrame = (steps: number) => {
       const initialFrame = startupEncoder !== null
@@ -264,7 +286,8 @@ async function main() {
       lensView.update(lastResult?.beams.lens ?? state.lens, viewProjection)
       sceneView.update(viewProjection)
       beamView.render(
-        encoder, context.getCurrentTexture(), viewProjection, beamMode, sceneView.draw, lensView.draw,
+        encoder, context.getCurrentTexture(), viewProjection, beamSource, beamMode, lastResult,
+        sceneView.draw, lensView.draw,
       )
 
       const causticPass = encoder.beginRenderPass({

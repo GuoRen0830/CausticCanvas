@@ -54,6 +54,8 @@ h1 {
   left: 16px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  max-width: calc(100% - 32px);
   gap: 8px;
   padding: 5px 8px;
   border-radius: 4px;
@@ -61,7 +63,7 @@ h1 {
   font-size: 13px;
 }
 
-#beam-view {
+#beam-control select {
   color: inherit;
   background: #252d39;
   border: 1px solid #465064;

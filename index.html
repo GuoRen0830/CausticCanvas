@@ -34,13 +34,24 @@
         </aside>
 
         <section id="viewport">
-          <label id="beam-control">Test beam
-            <select id="beam-view">
-              <option value="lit">Lit scene</option>
-              <option value="candidates">Candidate pixels</option>
-              <option value="footprint">Floor footprint</option>
-            </select>
-          </label>
+          <div id="beam-control">
+            <label>Light source
+              <select id="beam-source">
+                <option value="solver">Solver beams</option>
+                <option value="single">Single test beam</option>
+                <option value="pair">Two overlapping beams</option>
+              </select>
+            </label>
+            <label>View
+              <select id="beam-view">
+                <option value="lit">Lit scene</option>
+                <option value="candidates">Candidate pixels</option>
+                <option value="footprint">Floor footprint</option>
+                <option value="plane">Receiver plane</option>
+                <option value="difference">Absolute error</option>
+              </select>
+            </label>
+          </div>
           <canvas
             id="gpu-canvas"
             aria-label="Interactive scene preview"
