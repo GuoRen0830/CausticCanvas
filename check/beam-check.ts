@@ -6,6 +6,7 @@ import { createSceneRenderer } from '../src/rendering/scene-renderer'
 import type { BeamSource, BeamView } from '../src/rendering/beam-renderer'
 import type { ForwardResult } from '../src/contracts'
 import { checkSceneOcclusion } from './scene-occlusion'
+import { checkSceneTraining } from './scene-training'
 import { checkFirstHits } from './first-hit-check'
 
 // Use the production geometry, optical solver, accumulation and comparison passes.
@@ -155,6 +156,7 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
       report('PASS 8192 subpixel beams in one receiver texel, E = ' + reconstructed.toFixed(6) + ' W/m2')
     } finally { referenceModel.destroy(); denseLens.heightBuffer.destroy() }
     await checkFirstHits(device, report)
+    await checkSceneTraining(device, report)
   } finally {
     staging.destroy(); output.destroy(); beam.destroy(); scene.destroy(); forward.destroy(); lens.heightBuffer.destroy()
   }

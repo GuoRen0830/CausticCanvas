@@ -5,6 +5,7 @@ import { createHitTracer } from '../src/rendering/hit-tracer'
 import { buildSceneBvh } from '../src/rendering/scene-bvh'
 import { createSceneRenderer } from '../src/rendering/scene-renderer'
 import commonShader from '../src/rendering/shaders/beam-common.wgsl?raw'
+import bvhShader from '../src/rendering/shaders/bvh-query.wgsl?raw'
 import traceShader from '../src/rendering/shaders/first-hit.wgsl?raw'
 
 export async function checkFirstHits(device: GPUDevice, report: (line: string) => void) {
@@ -45,7 +46,7 @@ export async function checkFirstHits(device: GPUDevice, report: (line: string) =
   words[47] = count
   const uniform = device.createBuffer({ size: frame.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST })
   device.queue.writeBuffer(uniform, 0, frame)
-  const shader = device.createShaderModule({ code: commonShader + '\n' + traceShader })
+  const shader = device.createShaderModule({ code: [commonShader, bvhShader, traceShader].join('\n') })
   const tracer = createHitTracer(device, shader, uniform, mesh)
   const packedFaces = buildSceneBvh(mesh).triangles
   const receiver = { sizeX: 0.2, sizeY: 0.2, z: 0.5, width: 64, height: 64 }

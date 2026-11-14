@@ -11,6 +11,10 @@
     device.pushErrorScope('validation')
     try {
       await checkBeams(device, report)
+      if (new URLSearchParams(location.search).has('stroke')) {
+        const { checkSceneStroke } = await import('./scene-stroke.ts')
+        await checkSceneStroke(device, report)
+      }
       const error = await device.popErrorScope()
       if (error) throw new Error(error.message)
       report('ALL PASSED')

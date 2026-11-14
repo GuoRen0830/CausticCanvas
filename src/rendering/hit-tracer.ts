@@ -8,15 +8,14 @@ export function createHitTracer(
   device: GPUDevice, module: GPUShaderModule, uniform: GPUBuffer,
   mesh: SceneMesh,
 ) {
-  const bvh = buildSceneBvh(mesh)
   function upload(label: string, data: Uint32Array<ArrayBuffer>) {
     if (data.byteLength > device.limits.maxStorageBufferBindingSize) throw new Error(label + ' exceeds storage limit.')
     const buffer = device.createBuffer({ label, size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
     device.queue.writeBuffer(buffer, 0, data)
     return buffer
   }
-  const nodes = upload('Scene BVH nodes', bvh.nodes)
-  const triangles = upload('Scene BVH leaf triangles', bvh.triangles)
+  let nodes: GPUBuffer | undefined
+  let triangles: GPUBuffer | undefined
   const trace = device.createComputePipeline({
     label: 'Closest scene hit per source triangle', layout: 'auto',
     compute: { module, entryPoint: 'traceFirstHit' },
@@ -28,6 +27,7 @@ export function createHitTracer(
   const splatLayout = device.createBindGroupLayout({ entries: [0, 3].map(binding => ({
     binding, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' },
   })) })
+  let borrowed: { buffer: GPUBuffer; triangles: GPUBuffer; group: GPUBindGroup } | undefined
   let hits: GPUBuffer | undefined
   let sceneGroup: GPUBindGroup
   let splatGroup: GPUBindGroup
@@ -37,7 +37,22 @@ export function createHitTracer(
   let lastCount = 0
   return {
     splatLayout,
+    fromSolver(data: { buffer: GPUBuffer; triangles: GPUBuffer }) {
+      if (borrowed?.buffer !== data.buffer || borrowed.triangles !== data.triangles) {
+        borrowed = { ...data, group: device.createBindGroup({ layout: splatLayout, entries: [
+          { binding: 0, resource: { buffer: data.triangles } }, { binding: 3, resource: { buffer: data.buffer } },
+        ] }) }
+      }
+      return borrowed
+    },
     update(encoder: GPUCommandEncoder, field: TriangleBeamField, count: number, token: object) {
+      // Scene-trained beams borrow the solver's BVH storage. Allocate this
+      // independent copy only when rendering a field without matching hits.
+      if (!triangles || !nodes) {
+        const bvh = buildSceneBvh(mesh)
+        nodes = upload('Scene BVH nodes', bvh.nodes)
+        triangles = upload('Scene BVH leaf triangles', bvh.triangles)
+      }
       if (!hits || hits.size < 8 * count) {
         if (8 * count > device.limits.maxStorageBufferBindingSize) throw new Error('Hit buffer exceeds storage limit.')
         hits?.destroy()
@@ -76,6 +91,6 @@ export function createHitTracer(
       }
       return { group: splatGroup, buffer: hits }
     },
-    destroy() { hits?.destroy(); nodes.destroy(); triangles.destroy() },
+    destroy() { hits?.destroy(); nodes?.destroy(); triangles?.destroy() },
   }
 }

@@ -64,6 +64,22 @@ struct Footprint {
 }
 @group(0) @binding(7) var<storage, read_write> footprints: array<Footprint>;
 
+struct Refraction { beam: vec4f, direction: Dual3 }
+fn refractFace(a: Dual3, b: Dual3, c: Dual3) -> Refraction {
+  let dark = vec4f(0,0,1,0);
+  let normal = crossDual(subtract(b,a), subtract(c,a));
+  let length = root(mul(normal.x,normal.x)+mul(normal.y,normal.y)+mul(normal.z,normal.z));
+  let n = Dual3(divide(normal.x,length),divide(normal.y,length),divide(normal.z,length));
+  let k = constant(1-p.eta*p.eta) + mul(n.z,n.z)*(p.eta*p.eta);
+  if !(k.x > 1e-8) { return Refraction(dark, Dual3()); }
+  let factor = root(k)-n.z*p.eta;
+  var d = Dual3(mul(factor,n.x),mul(factor,n.y),constant(p.eta)+mul(factor,n.z));
+  if p.eta == 1.0 { d = Dual3(constant(0),constant(0),constant(1)); }
+  if !(d.z.x > 1e-6) { return Refraction(dark, Dual3()); }
+  let flux = p.irradiance * (p.aperture.x/f32(p.grid.x-1u)) * (p.aperture.y/f32(p.grid.y-1u)) * 0.5;
+  return Refraction(vec4f(d.x.x,d.y.x,d.z.x,flux), d);
+}
+
 fn footprint(face: u32) -> Footprint {
   var result: Footprint;
   result.beam = vec4f(0,0,1,0);
@@ -71,17 +87,11 @@ fn footprint(face: u32) -> Footprint {
   let a = vertex(ids.x, vec3f(1,0,0));
   let b = vertex(ids.y, vec3f(0,1,0));
   let c = vertex(ids.z, vec3f(0,0,1));
-  let normal = crossDual(subtract(b,a), subtract(c,a));
-  let length = root(mul(normal.x,normal.x)+mul(normal.y,normal.y)+mul(normal.z,normal.z));
-  let n = Dual3(divide(normal.x,length),divide(normal.y,length),divide(normal.z,length));
-  let k = constant(1-p.eta*p.eta) + mul(n.z,n.z)*(p.eta*p.eta);
-  if !(k.x > 1e-8) { return result; }
-  let factor = root(k)-n.z*p.eta;
-  var d = Dual3(mul(factor,n.x),mul(factor,n.y),constant(p.eta)+mul(factor,n.z));
-  if p.eta == 1.0 { d = Dual3(constant(0),constant(0),constant(1)); }
-  if !(d.z.x > 1e-6) || !(max(a.z.x,max(b.z.x,c.z.x)) < p.receiverZ) { return result; }
-  let flux = p.irradiance * (p.aperture.x/f32(p.grid.x-1u)) * (p.aperture.y/f32(p.grid.y-1u)) * 0.5;
-  result.beam = vec4f(d.x.x,d.y.x,d.z.x,flux);
+  if !(max(a.z.x,max(b.z.x,c.z.x)) < p.receiverZ) { return result; }
+  let ray = refractFace(a,b,c);
+  result.beam = ray.beam;
+  if ray.beam.w == 0 { return result; }
+  let d = ray.direction;
   result.corners = array<Dual2,3>(project(a,d),project(b,d),project(c,d));
   for (var i=0u; i<3u; i++) {
     let q = result.corners[i];

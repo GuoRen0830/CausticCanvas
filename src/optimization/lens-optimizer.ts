@@ -22,11 +22,12 @@ export function incidentPower(input: ForwardInput): number {
   return input.optics.incidentIrradiance * input.lens.sizeX * input.lens.sizeY
 }
 
-// Target irradiance E[i] = P * w[i] / (dA * sum(w)); null for empty targets.
+// Normalize incident power over the physical surface area represented by each pixel.
 export function normalizeTarget(
   target: Readonly<TargetImage>,
   receiver: Readonly<ReceiverPlane>,
   power: number,
+  surfaceAreas?: Float32Array,
 ): Float32Array | null {
   if (target.width !== receiver.width || target.height !== receiver.height) {
     throw new Error('Target size must match the receiver resolution.')
@@ -34,19 +35,21 @@ export function normalizeTarget(
   if (target.values.length !== target.width * target.height) {
     throw new Error('Target values do not match the target size.')
   }
-  let sum = 0
-  for (const value of target.values) {
+  if (surfaceAreas && surfaceAreas.length !== target.values.length) throw new Error('Invalid surface area map.')
+  const pixelArea = (receiver.sizeX / receiver.width) * (receiver.sizeY / receiver.height)
+  let weightedArea = 0
+  for (let i = 0; i < target.values.length; i++) {
+    const value = target.values[i]
     if (!Number.isFinite(value) || value < 0) {
       throw new Error('Target weights must be finite and nonnegative.')
     }
-    sum += value
+    weightedArea += value * (surfaceAreas?.[i] ?? pixelArea)
   }
-  if (sum <= 0) return null
-  const pixelArea = (receiver.sizeX / receiver.width) * (receiver.sizeY / receiver.height)
-  const scale = power / (pixelArea * sum)
+  if (weightedArea <= 0) return null
+  const scale = power / weightedArea
   const normalized = new Float32Array(target.values.length)
   for (let i = 0; i < normalized.length; i++) {
-    normalized[i] = target.values[i] * scale
+    normalized[i] = surfaceAreas?.[i] === 0 ? 0 : target.values[i] * scale
   }
   return normalized
 }
@@ -342,7 +345,7 @@ export async function createLensOptimizer(
         }
         if (target.version === targetVersion) return
         targetVersion = target.version
-        const normalized = normalizeTarget(target, receiver, power)
+        const normalized = normalizeTarget(target, receiver, power, forward.targetSurfaceAreas)
         active = normalized !== null
         done = !active
         if (!normalized) return

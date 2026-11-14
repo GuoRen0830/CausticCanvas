@@ -13,6 +13,7 @@ import type { BeamSource, BeamView } from './rendering/beam-renderer'
 import { createCausticDisplay } from './rendering/caustic-display'
 import { createFrameLoop } from './frame-loop'
 import { createSimulation } from './simulation'
+import { buildDesignView } from './optics/design-view'
 import { createForwardModel } from './optics/forward-model'
 import { createLensOptimizer } from './optimization/lens-optimizer'
 import type { AppState, ForwardModel, ForwardResult, LensOptimizer } from './contracts'
@@ -144,6 +145,8 @@ async function main() {
       }
     }
 
+    const mesh = buildSceneMesh(state.receiver, config.scene.box)
+    const designView = buildDesignView(mesh, state.receiver)
     drawingPad = createDrawingPad(targetCanvas, state.receiver, (target) => {
       // Keep only the latest target; upload it at the next batch boundary.
       state.target = target
@@ -154,7 +157,7 @@ async function main() {
         : 'Draw a pattern to begin.'
       updateRunState()
       frameLoop?.requestFrame()
-    })
+    }, designView)
     clearButton.addEventListener('click', drawingPad.clear, { signal: events.signal })
 
     const causticContext = causticCanvas.getContext('webgpu')
@@ -181,7 +184,6 @@ async function main() {
 
     const lensView = createLensRenderer(device, format, state.lens, opticalToWorld)
     lensRenderer = lensView
-    const mesh = buildSceneMesh(state.receiver, config.scene.box)
     const sceneView = createSceneRenderer(
       device, state.receiver, config.scene.box, opticalToWorld, mesh,
     )
@@ -197,8 +199,8 @@ async function main() {
       candidates: 'Candidate count · Blue 1 · Cyan 2 · Green 4 · Yellow 16 · Red 64+',
       footprint: 'Visible floor irradiance after scene occlusion',
       blocked: 'Floor irradiance intercepted by the box · Brighter means more light blocked',
-      plane: 'Unobstructed reference plane · Same texels, orientation and exposure as Caustic result',
-      difference: '|Beam irradiance − solver irradiance| · Black = zero at display precision',
+      plane: 'Irradiance these beams would produce on the unobstructed reference plane',
+      difference: 'Absolute irradiance difference between the scene and the unobstructed plane',
     }
     const changeView = () => {
       const source = sourceSelect.value
@@ -226,7 +228,7 @@ async function main() {
       optics: { ...state.optics },
       receiver: { ...state.receiver },
     }
-    forward = await createForwardModel(device, initial)
+    forward = await createForwardModel(device, initial, { designView })
     if (disposed) {
       forward?.destroy()
       return

@@ -1,9 +1,11 @@
+import type { DesignView } from '../optics/design-view'
 import type { TargetImage } from '../contracts'
 
 export function createDrawingPad(
   canvas: HTMLCanvasElement,
   size: Pick<TargetImage, 'width' | 'height'>,
   onChange: (target: TargetImage) => void,
+  view?: DesignView,
 ) {
   const { width, height } = size
   if (
@@ -19,6 +21,26 @@ export function createDrawingPad(
   // Keep target resolution independent of CSS size and display density.
   canvas.width = width
   canvas.height = height
+  if (view) {
+    if (view.width !== width || view.height !== height) throw new Error('Drawing size must match the design view.')
+    // CSS backing never enters the brush alpha channel used for the loss.
+    const guide = document.createElement('canvas')
+    guide.width = width
+    guide.height = height
+    const ctx = guide.getContext('2d')!
+    const image = ctx.createImageData(width, height)
+    const depths = new Float32Array(view.samples.buffer)
+    let far = 0
+    for (let i = 0; i < width * height; i++) far = Math.max(far, depths[2*i+1])
+    for (let i = 0; i < width * height; i++) {
+      const j = 4 * ((height - 1 - Math.floor(i / width)) * width + i % width)
+      const shade = view.surfaceAreas[i] > 0 ? 22 + 60 * (1 - depths[2*i+1] / far) : 2
+      image.data.set([shade, shade, shade, 255], j)
+    }
+    ctx.putImageData(image, 0, 0)
+    canvas.style.backgroundImage = `url(${guide.toDataURL()})`
+    canvas.style.backgroundSize = '100% 100%'
+  }
   context.strokeStyle = '#fff'
   context.fillStyle = '#fff'
   // Keep brush size proportional when the image resolution changes.
@@ -41,7 +63,7 @@ export function createDrawingPad(
       for (let x = 0; x < width; x++) {
         const source = 4 * (y * width + x) + 3
         const destination = (height - 1 - y) * width + x
-        values[destination] = pixels[source] / 255
+        values[destination] = view?.surfaceAreas[destination] === 0 ? 0 : pixels[source] / 255
       }
     }
 

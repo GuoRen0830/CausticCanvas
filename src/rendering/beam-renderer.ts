@@ -6,6 +6,7 @@ import type { SceneBox } from './scene-mesh'
 import { createHitTracer } from './hit-tracer'
 import commonShader from './shaders/beam-common.wgsl?raw'
 import coverageShader from './shaders/pixel-coverage.wgsl?raw'
+import bvhShader from './shaders/bvh-query.wgsl?raw'
 import traceShader from './shaders/first-hit.wgsl?raw'
 import splatShader from './shaders/hit-splat.wgsl?raw'
 import { createTestBeams } from './test-beams'
@@ -42,7 +43,7 @@ export function createBeamRenderer(
     label: 'Beam frame', size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   const module = device.createShaderModule({
-    label: 'Beam rendering and plane comparison', code: [displayColor, commonShader, coverageShader, beamShader, receiverShader, traceShader, splatShader].join('\n'),
+    label: 'Beam rendering and plane comparison', code: [displayColor, commonShader, coverageShader, beamShader, receiverShader, bvhShader, traceShader, splatShader].join('\n'),
   })
   const fieldLayout = device.createBindGroupLayout({
     entries: [0, 1].map(binding => ({
@@ -279,7 +280,9 @@ export function createBeamRenderer(
       geometry.end()
 
       const firstHit = method === 'first-hit' && mode !== 'blocked'
-      const cached = firstHit ? tracer.update(encoder, field, count, source === 'solver' ? result! : tests.field) : null
+      const solverHits = source === 'solver' && result?.firstHits?.mesh === mesh ? result.firstHits : undefined
+      const cached = !firstHit ? null : solverHits ? tracer.fromSolver(solverHits)
+        : tracer.update(encoder, field, count, source === 'solver' ? result! : tests.field)
       const pass = encoder.beginRenderPass({
         label: cached ? 'Splat first hits' : 'Accumulate beams', colorAttachments: [clear(screen.lightView)],
       })
