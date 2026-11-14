@@ -9,8 +9,8 @@ fn values(v: Dual3) -> vec3f { return vec3f(v.x.x, v.y.x, v.z.x); }
 fn dotNormal(n: vec3f, v: Dual3) -> vec4f { return n.x*v.x + n.y*v.y + n.z*v.z; }
 
 @compute @workgroup_size(64)
-fn sceneTrace(@builtin(global_invocation_id) id: vec3u) {
-  let face = id.x;
+fn sceneTrace(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let face = opticalIndex(id, groups);
   if face >= 2u*(p.grid.x-1u)*(p.grid.y-1u) { return; }
   let ids = indices(face);
   let a = vertex(ids.x,vec3f(0));
@@ -71,8 +71,8 @@ fn sameSurface(xy: vec2u, facePlusOne: u32, tri: Triangle, n: vec3f) -> bool {
 }
 
 @compute @workgroup_size(64)
-fn sceneForward(@builtin(global_invocation_id) id: vec3u) {
-  let face = id.x;
+fn sceneForward(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let face = opticalIndex(id, groups);
   if face >= arrayLength(&sceneHits) { return; }
   let hit = sceneHits[face];
   if hit.trianglePlusOne == 0u { return; }
@@ -90,8 +90,8 @@ fn sceneForward(@builtin(global_invocation_id) id: vec3u) {
 }
 
 @compute @workgroup_size(64)
-fn sceneBackward(@builtin(global_invocation_id) id: vec3u) {
-  let face = id.x;
+fn sceneBackward(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let face = opticalIndex(id, groups);
   if face >= arrayLength(&sceneHits) { return; }
   triangleGradient[face] = vec4f(0);
   let hit = sceneHits[face];

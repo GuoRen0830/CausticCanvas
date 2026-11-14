@@ -7,6 +7,7 @@ Run `npm ci`, then `npm run dev`. Open these paths on the local server in a WebG
 | `/check/optics-check.html` | Independent CPU image/flux comparisons, finite-difference gradients, output clearing, and resource contracts |
 | `/check/beam-check.html` | Beam additivity, receiver versus solver, analytic box shadows, GPU BVH hits versus CPU brute force, a sloped mesh, off-camera occlusion, illumination beyond the reference plane, zero-flux black output, lens inspection, and scene-training gradients |
 | `/check/beam-check.html?stroke` | Adds the 3000-step horizontal stroke across the box and floor at a fixed 33 by 33 grid |
+| `/check/beam-check.html?large` | 2048 by 2048 lens cells, including the last beam, BVH hit and optimizer updates past the single-axis dispatch limit |
 | `/check/optimizer-check.html` | Target normalization, loss and regularization gradients, Adam updates, and optimizer lifecycle |
 | `/check/loss-filter-check.html` | GPU Gaussian-filter gradients against CPU finite differences, including boundaries and non-square images |
 | `/check/integration-check.html?shape=circle` | Real A/B optimization, received power, stray light, stopping, clearing, warm restart, and final-preview consistency |

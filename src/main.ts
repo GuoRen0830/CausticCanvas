@@ -50,7 +50,7 @@ async function main() {
   const status = statusElement
   const causticStatus = causticStatusElement
 
-  const { device, context, format } = await initializeGPU(canvas)
+  const { device, context, format } = await initializeGPU(canvas, config.lens)
   const events = new AbortController()
   let disposed = false
   let hasTarget = false

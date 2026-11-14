@@ -1,16 +1,17 @@
 // A fixed-size lane team shares each triangle's pixel work.
 override lanesPerTriangle: u32 = 64u;
 @compute @workgroup_size(64)
-fn prepareFootprints(@builtin(global_invocation_id) id: vec3u) {
-  if id.x >= 2u*(p.grid.x-1u)*(p.grid.y-1u) { return; }
-  let f = footprint(id.x);
-  footprints[id.x] = f;
-  beams[id.x] = f.beam;
+fn prepareFootprints(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let face = opticalIndex(id, groups);
+  if face >= 2u*(p.grid.x-1u)*(p.grid.y-1u) { return; }
+  let f = footprint(face);
+  footprints[face] = f;
+  beams[face] = f.beam;
 }
 
 @compute @workgroup_size(64)
-fn forwardCooperative(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) lane: u32) {
-  let face = group.x*(64u/lanesPerTriangle)+lane/lanesPerTriangle;
+fn forwardCooperative(@builtin(workgroup_id) group: vec3u, @builtin(num_workgroups) groups: vec3u, @builtin(local_invocation_index) lane: u32) {
+  let face = (group.y * groups.x + group.x) * (64u/lanesPerTriangle)+lane/lanesPerTriangle;
   let localLane = lane%lanesPerTriangle;
   var f: Footprint;
   if face < 2u*(p.grid.x-1u)*(p.grid.y-1u) { f = footprints[face]; }
@@ -29,8 +30,8 @@ fn forwardCooperative(@builtin(workgroup_id) group: vec3u, @builtin(local_invoca
 var<workgroup> partialGradient: array<vec3f,64>;
 
 @compute @workgroup_size(64)
-fn backwardCooperative(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) lane: u32) {
-  let face = group.x*(64u/lanesPerTriangle)+lane/lanesPerTriangle;
+fn backwardCooperative(@builtin(workgroup_id) group: vec3u, @builtin(num_workgroups) groups: vec3u, @builtin(local_invocation_index) lane: u32) {
+  let face = (group.y * groups.x + group.x) * (64u/lanesPerTriangle)+lane/lanesPerTriangle;
   let localLane = lane%lanesPerTriangle;
   var f: Footprint;
   if face < 2u*(p.grid.x-1u)*(p.grid.y-1u) { f = footprints[face]; }

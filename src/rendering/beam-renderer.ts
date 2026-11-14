@@ -1,3 +1,4 @@
+import { workgroupGrid } from '../gpu/dispatch'
 import { mat4 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
 import type { CausticImage, ForwardResult, ReceiverPlane } from '../contracts'
@@ -165,8 +166,7 @@ export function createBeamRenderer(
         pass.setBindGroup(0, frameGroup)
         pass.setBindGroup(1, planeField.group)
         const groups = Math.ceil(count / 64)
-        const x = Math.min(groups, device.limits.maxComputeWorkgroupsPerDimension)
-        pass.dispatchWorkgroups(x, Math.ceil(groups / x))
+        pass.dispatchWorkgroups(...workgroupGrid(groups, device.limits.maxComputeWorkgroupsPerDimension))
         pass.end()
         encoder.copyBufferToTexture({ buffer: sums, bytesPerRow: rowWords * 4 }, { texture: light }, [width, height])
       } else {

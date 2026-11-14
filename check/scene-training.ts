@@ -1,7 +1,9 @@
+import { config } from '../src/config'
+import { buildSceneMesh } from '../src/rendering/scene-mesh'
 import { createFlatLens } from '../src/geometry/lens-mesh'
 import { buildDesignView } from '../src/optics/design-view'
 import { createForwardModel } from '../src/optics/forward-model'
-import { normalizeTarget } from '../src/optimization/lens-optimizer'
+import { createLensOptimizer, normalizeTarget } from '../src/optimization/lens-optimizer'
 import type { ForwardModel } from '../src/contracts'
 
 export async function checkSceneTraining(device: GPUDevice, report: (line: string) => void) {
@@ -94,5 +96,50 @@ export async function checkSceneTraining(device: GPUDevice, report: (line: strin
     scene.destroy()
     lens.heightBuffer.destroy()
     for (const b of owned) b.destroy()
+  }
+}
+
+// Exercises multiple rows in both face and vertex dispatches on a standard device.
+// Only run on request: the beam and triangle-gradient buffers are 128 MiB each.
+export async function checkLargeSceneDispatch(device: GPUDevice, report: (line: string) => void) {
+  const lens = createFlatLens(device, { ...config.lens, columns: 2049, rows: 2049 })
+  const receiver = config.receiver
+  const input = { lens, receiver, optics: config.optics }
+  const view = buildDesignView(buildSceneMesh(receiver, config.scene.box), receiver)
+  const model = await createForwardModel(device, input, { designView: view })
+  const optimizer = (await createLensOptimizer(device, input, model, { ...config.optimizer, lossLogInterval: 0 }))!
+  const tailCount = 2048
+  const staging = device.createBuffer({ size: tailCount * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST })
+  try {
+    const lastFace = 2 * (lens.columns - 1) * (lens.rows - 1) - 1
+    let enc = device.createCommandEncoder()
+    const flat = model.encode(enc, input)
+    enc.copyBufferToBuffer(flat.beams.buffer, lastFace * 16, staging, 0, 16)
+    enc.copyBufferToBuffer(flat.firstHits!.buffer, lastFace * 8, staging, 16, 8)
+    device.queue.submit([enc.finish()])
+    await staging.mapAsync(GPUMapMode.READ)
+    const bytes = staging.getMappedRange()
+    const flux = new Float32Array(bytes)[3]
+    const trianglePlusOne = new Uint32Array(bytes)[4]
+    staging.unmap()
+    const expected = input.optics.incidentIrradiance * lens.sizeX * lens.sizeY / (lastFace + 1)
+    if (!trianglePlusOne || !(Math.abs(flux / expected - 1) < 1e-5)) throw new Error('Last beam missing or invalid')
+
+    const { width, height } = receiver
+    const values = Float32Array.from({ length: width * height }, (_,i) => i % width < width / 2 ? 1 : 0)
+    optimizer.setTarget({ width, height, values, version: 1 })
+    enc = device.createCommandEncoder()
+    const update = optimizer.encodeStep(enc, input)
+    const offset = (lens.rows * lens.columns - tailCount) * 4
+    enc.copyBufferToBuffer(update.lens.heightBuffer, offset, staging, 0, staging.size)
+    device.queue.submit([enc.finish()])
+    await staging.mapAsync(GPUMapMode.READ)
+    const tail = new Float32Array(staging.getMappedRange())
+    const changed = tail.every(Number.isFinite) && tail.some(h => Math.abs(h - config.lens.thickness) > 1e-6)
+    staging.unmap()
+    if (!changed) throw new Error('Vertex gradients or updates missing from last dispatch row')
+    report('PASS 2048 x 2048 cells: verified final beam, first hit and updated tail heights')
+  } finally {
+    staging.destroy(); optimizer.destroy(); model.destroy(); lens.heightBuffer.destroy()
   }
 }

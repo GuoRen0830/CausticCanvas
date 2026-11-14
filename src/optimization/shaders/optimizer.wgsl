@@ -69,7 +69,7 @@ fn reduceLoss(localIndex: u32, groupIndex: u32, value: f32) {
     }
     workgroupBarrier();
   }
-  if (localIndex == 0u) {
+  if (localIndex == 0u && groupIndex < arrayLength(&lossPartials)) {
     lossPartials[groupIndex] = partialSums[0];
   }
 }
@@ -78,27 +78,29 @@ fn reduceLoss(localIndex: u32, groupIndex: u32, value: f32) {
 fn lossFromBuffer(
   @builtin(global_invocation_id) id: vec3<u32>,
   @builtin(local_invocation_index) localIndex: u32,
-  @builtin(workgroup_id) group: vec3<u32>,
+  @builtin(num_workgroups) groups: vec3u,
 ) {
+  let index = id.x + id.y * groups.x * LOSS_WORKGROUP;
   var loss = 0.0;
-  if (id.x < params.imageSize.x * params.imageSize.y) {
-    loss = pixelLoss(id.x, causticBuffer[id.x]);
+  if (index < params.imageSize.x * params.imageSize.y) {
+    loss = pixelLoss(index, causticBuffer[index]);
   }
-  reduceLoss(localIndex, group.x, loss);
+  reduceLoss(localIndex, index / LOSS_WORKGROUP, loss);
 }
 
 @compute @workgroup_size(LOSS_WORKGROUP)
 fn lossFromTexture(
   @builtin(global_invocation_id) id: vec3<u32>,
   @builtin(local_invocation_index) localIndex: u32,
-  @builtin(workgroup_id) group: vec3<u32>,
+  @builtin(num_workgroups) groups: vec3u,
 ) {
+  let index = id.x + id.y * groups.x * LOSS_WORKGROUP;
   var loss = 0.0;
-  if (id.x < params.imageSize.x * params.imageSize.y) {
-    let pixel = vec2<u32>(id.x % params.imageSize.x, id.x / params.imageSize.x);
-    loss = pixelLoss(id.x, textureLoad(causticTexture, pixel, 0).r);
+  if (index < params.imageSize.x * params.imageSize.y) {
+    let pixel = vec2<u32>(index % params.imageSize.x, index / params.imageSize.x);
+    loss = pixelLoss(index, textureLoad(causticTexture, pixel, 0).r);
   }
-  reduceLoss(localIndex, group.x, loss);
+  reduceLoss(localIndex, index / LOSS_WORKGROUP, loss);
 }
 
 // Symmetric, zero-padded Gaussian filtering: d||K(E-T)||²/dE = 2 K^T K(E-T).
@@ -126,31 +128,35 @@ fn filtered(index: u32, axis: u32, source: u32) -> f32 {
   return sum / weightSum;
 }
 
-@compute @workgroup_size(256)
-fn filterResidualX(@builtin(global_invocation_id) id: vec3<u32>) {
-  if (id.x < params.imageSize.x * params.imageSize.y) {
-    filterA[id.x] = filtered(id.x, 0u, 0u);
+@compute @workgroup_size(LOSS_WORKGROUP)
+fn filterResidualX(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let index = id.x + id.y * groups.x * LOSS_WORKGROUP;
+  if (index < params.imageSize.x * params.imageSize.y) {
+    filterA[index] = filtered(index, 0u, 0u);
   }
 }
 
-@compute @workgroup_size(256)
-fn filterResidualY(@builtin(global_invocation_id) id: vec3<u32>) {
-  if (id.x < params.imageSize.x * params.imageSize.y) {
-    filterB[id.x] = filtered(id.x, 1u, 1u);
+@compute @workgroup_size(LOSS_WORKGROUP)
+fn filterResidualY(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let index = id.x + id.y * groups.x * LOSS_WORKGROUP;
+  if (index < params.imageSize.x * params.imageSize.y) {
+    filterB[index] = filtered(index, 1u, 1u);
   }
 }
 
-@compute @workgroup_size(256)
-fn filterGradientY(@builtin(global_invocation_id) id: vec3<u32>) {
-  if (id.x < params.imageSize.x * params.imageSize.y) {
-    filterA[id.x] = filtered(id.x, 1u, 2u);
+@compute @workgroup_size(LOSS_WORKGROUP)
+fn filterGradientY(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let index = id.x + id.y * groups.x * LOSS_WORKGROUP;
+  if (index < params.imageSize.x * params.imageSize.y) {
+    filterA[index] = filtered(index, 1u, 2u);
   }
 }
 
-@compute @workgroup_size(256)
-fn filterGradientX(@builtin(global_invocation_id) id: vec3<u32>) {
-  if (id.x < params.imageSize.x * params.imageSize.y) {
-    pixelGradient[id.x] = 2.0 * params.invMeanIrradianceSq * params.invPixelCount * filtered(id.x, 0u, 1u);
+@compute @workgroup_size(LOSS_WORKGROUP)
+fn filterGradientX(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let index = id.x + id.y * groups.x * LOSS_WORKGROUP;
+  if (index < params.imageSize.x * params.imageSize.y) {
+    pixelGradient[index] = 2.0 * params.invMeanIrradianceSq * params.invPixelCount * filtered(index, 0u, 1u);
   }
 }
 
@@ -161,27 +167,28 @@ fn vertexIndex(column: u32, row: u32) -> u32 {
 // Dimensionless curvature: discrete Laplacian times the mean spacing.
 // Boundary vertices have no curvature term.
 @compute @workgroup_size(64)
-fn computeCurvature(@builtin(global_invocation_id) id: vec3<u32>) {
+fn computeCurvature(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = id.x + id.y * groups.x * 64u;
   let count = params.gridSize.x * params.gridSize.y;
-  if (id.x >= count) {
+  if (vertex >= count) {
     return;
   }
-  let column = id.x % params.gridSize.x;
-  let row = id.x / params.gridSize.x;
+  let column = vertex % params.gridSize.x;
+  let row = vertex / params.gridSize.x;
   if (
     column == 0u || row == 0u ||
     column + 1u == params.gridSize.x || row + 1u == params.gridSize.y
   ) {
-    curvature[id.x] = 0.0;
+    curvature[vertex] = 0.0;
     return;
   }
-  let h = heights[id.x];
+  let h = heights[vertex];
   let dx2 = params.spacing.x * params.spacing.x;
   let dy2 = params.spacing.y * params.spacing.y;
   let laplacian =
-    (heights[id.x - 1u] + heights[id.x + 1u] - 2.0 * h) / dx2 +
-    (heights[id.x - params.gridSize.x] + heights[id.x + params.gridSize.x] - 2.0 * h) / dy2;
-  curvature[id.x] = laplacian * 0.5 * (params.spacing.x + params.spacing.y);
+    (heights[vertex - 1u] + heights[vertex + 1u] - 2.0 * h) / dx2 +
+    (heights[vertex - params.gridSize.x] + heights[vertex + params.gridSize.x] - 2.0 * h) / dy2;
+  curvature[vertex] = laplacian * 0.5 * (params.spacing.x + params.spacing.y);
 }
 
 // dL/d(gx, gy) of the slope penalty for one face.
@@ -231,23 +238,24 @@ fn cellSlopeGradient(cellColumn: u32, cellRow: u32, lx: u32, ly: u32) -> f32 {
 
 // Add regularization gradients to the optical gradient written by the forward model.
 @compute @workgroup_size(64)
-fn addRegularization(@builtin(global_invocation_id) id: vec3<u32>) {
+fn addRegularization(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = id.x + id.y * groups.x * 64u;
   let columns = params.gridSize.x;
   let rows = params.gridSize.y;
-  if (id.x >= columns * rows) {
+  if (vertex >= columns * rows) {
     return;
   }
-  let column = id.x % columns;
-  let row = id.x / columns;
+  let column = vertex % columns;
+  let row = vertex / columns;
 
   // Smoothness: L = w / N * sum(q^2), q = s * laplacian(h).
   let dx2 = params.spacing.x * params.spacing.x;
   let dy2 = params.spacing.y * params.spacing.y;
-  var curvatureSum = -2.0 * curvature[id.x] * (1.0 / dx2 + 1.0 / dy2);
-  if (column > 0u) { curvatureSum += curvature[id.x - 1u] / dx2; }
-  if (column + 1u < columns) { curvatureSum += curvature[id.x + 1u] / dx2; }
-  if (row > 0u) { curvatureSum += curvature[id.x - columns] / dy2; }
-  if (row + 1u < rows) { curvatureSum += curvature[id.x + columns] / dy2; }
+  var curvatureSum = -2.0 * curvature[vertex] * (1.0 / dx2 + 1.0 / dy2);
+  if (column > 0u) { curvatureSum += curvature[vertex - 1u] / dx2; }
+  if (column + 1u < columns) { curvatureSum += curvature[vertex + 1u] / dx2; }
+  if (row > 0u) { curvatureSum += curvature[vertex - columns] / dy2; }
+  if (row + 1u < rows) { curvatureSum += curvature[vertex + columns] / dy2; }
   let meanSpacing = 0.5 * (params.spacing.x + params.spacing.y);
   var gradient = 2.0 * params.smoothnessWeight * params.invVertexCount *
     meanSpacing * curvatureSum;
@@ -266,28 +274,29 @@ fn addRegularization(@builtin(global_invocation_id) id: vec3<u32>) {
   }
 
   // Treat non-finite optical gradients as zero instead of corrupting the lens.
-  let optical = heightGradient[id.x];
+  let optical = heightGradient[vertex];
   let finiteOptical = select(0.0, optical, abs(optical) < 3.0e38);
-  heightGradient[id.x] = finiteOptical + gradient;
+  heightGradient[vertex] = finiteOptical + gradient;
 }
 
 @compute @workgroup_size(64)
-fn adamUpdate(@builtin(global_invocation_id) id: vec3<u32>) {
-  if (id.x >= params.gridSize.x * params.gridSize.y) {
+fn adamUpdate(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = id.x + id.y * groups.x * 64u;
+  if (vertex >= params.gridSize.x * params.gridSize.y) {
     return;
   }
   let t = f32(state.step + 1u);
-  let g = heightGradient[id.x];
-  let previous = moments[id.x];
+  let g = heightGradient[vertex];
+  let previous = moments[vertex];
   let m = params.beta1 * previous.x + (1.0 - params.beta1) * g;
   let v = params.beta2 * previous.y + (1.0 - params.beta2) * g * g;
-  moments[id.x] = vec2<f32>(m, v);
+  moments[vertex] = vec2<f32>(m, v);
   let mHat = m / (1.0 - pow(params.beta1, t));
   let vHat = v / (1.0 - pow(params.beta2, t));
   let remaining = max(0.0, 1.0 - t / f32(params.maxIterations));
   let rate = params.learningRate * (0.05 + 0.95 * remaining * remaining);
-  let updated = heights[id.x] - rate * mHat / (sqrt(vHat) + params.epsilon);
-  heights[id.x] = max(updated, params.minHeight);
+  let updated = heights[vertex] - rate * mHat / (sqrt(vHat) + params.epsilon);
+  heights[vertex] = max(updated, params.minHeight);
 }
 
 // Runs after adamUpdate so every vertex sees the same step count.

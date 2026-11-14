@@ -6,7 +6,7 @@ import sceneShader from './scene-optics.wgsl?raw'
 // Each entry point reflects only the bindings it actually uses. This keeps even
 // the backward pass within the standard eight storage bindings per shader stage.
 export async function createScenePasses(
-  device: GPUDevice, view: DesignView, faceCount: number, vertexCount: number,
+  device: GPUDevice, view: DesignView, faceCount: number, faceGrid: [number, number], vertexGrid: [number, number],
   beams: GPUBuffer, image: GPUBuffer, triangleGradients: GPUBuffer,
   allocate: (label: string, size: number, usage: GPUBufferUsageFlags) => GPUBuffer,
 ) {
@@ -28,25 +28,25 @@ export async function createScenePasses(
   const pixels = upload('Light-view visible surfaces', view.samples)
   const hits = allocate('Solver first hits', faceCount * 8, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC)
   const firstHits = { mesh: view.mesh, buffer: hits, triangles }
-  function run(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, count: number,
+  function run(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, grid: [number, number],
     bindings: [number, GPUBuffer][]) {
     const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0),
       entries: bindings.map(([binding, buffer]) => ({ binding, resource: { buffer } })) })
     const pass = encoder.beginComputePass({ label: pipeline.label })
     pass.setPipeline(pipeline)
     pass.setBindGroup(0, group)
-    pass.dispatchWorkgroups(Math.ceil(count / 64))
+    pass.dispatchWorkgroups(...grid)
     pass.end()
   }
   return {
     firstHits,
     encode(encoder: GPUCommandEncoder, params: GPUBuffer, heights: GPUBuffer) {
-      run(encoder, trace, faceCount, [[0,params],[1,heights],[2,beams],[8,triangles],[9,nodes],[10,hits]])
-      run(encoder, forward, faceCount, [[0,params],[1,heights],[2,beams],[3,image],[8,triangles],[10,hits],[11,pixels]])
+      run(encoder, trace, faceGrid, [[0,params],[1,heights],[2,beams],[8,triangles],[9,nodes],[10,hits]])
+      run(encoder, forward, faceGrid, [[0,params],[1,heights],[2,beams],[3,image],[8,triangles],[10,hits],[11,pixels]])
     },
     backward(encoder: GPUCommandEncoder, params: GPUBuffer, heights: GPUBuffer, upstream: GPUBuffer, output: GPUBuffer) {
-      run(encoder, backward, faceCount, [[0,params],[1,heights],[2,beams],[4,upstream],[5,triangleGradients],[8,triangles],[10,hits],[11,pixels]])
-      run(encoder, gather, vertexCount, [[0,params],[5,triangleGradients],[6,output]])
+      run(encoder, backward, faceGrid, [[0,params],[1,heights],[2,beams],[4,upstream],[5,triangleGradients],[8,triangles],[10,hits],[11,pixels]])
+      run(encoder, gather, vertexGrid, [[0,params],[5,triangleGradients],[6,output]])
     },
   }
 }

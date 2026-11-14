@@ -165,9 +165,13 @@ fn addEnergy(index: u32, value: f32) {
     old = attempt.old_value;
   }
 }
+// These kernels use 64 x 1 local invocations. Y selects a row of whole workgroups.
+fn opticalIndex(id: vec3u, groups: vec3u) -> u32 {
+  return id.x + id.y * groups.x * 64u;
+}
 @compute @workgroup_size(64)
-fn forward(@builtin(global_invocation_id) id: vec3u) {
-  let face = id.x;
+fn forward(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let face = opticalIndex(id, groups);
   if face >= 2u*(p.grid.x-1u)*(p.grid.y-1u) { return; }
   let f = footprint(face);
   beams[face] = f.beam;
@@ -184,8 +188,8 @@ fn forward(@builtin(global_invocation_id) id: vec3u) {
   }
 }
 @compute @workgroup_size(64)
-fn backward(@builtin(global_invocation_id) id: vec3u) {
-  let face = id.x;
+fn backward(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let face = opticalIndex(id, groups);
   if face >= 2u*(p.grid.x-1u)*(p.grid.y-1u) { return; }
   var f: Footprint;
   if cacheFootprints { f = footprints[face]; } else { f = footprint(face); }
@@ -204,8 +208,8 @@ fn backward(@builtin(global_invocation_id) id: vec3u) {
   triangleGradient[face] = vec4f(gradient,0);
 }
 @compute @workgroup_size(64)
-fn gather(@builtin(global_invocation_id) id: vec3u) {
-  let v = id.x;
+fn gather(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let v = opticalIndex(id, groups);
   if v >= p.grid.x*p.grid.y { return; }
   let col = i32(v%p.grid.x);
   let row = i32(v/p.grid.x);

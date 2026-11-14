@@ -15,6 +15,10 @@
         const { checkSceneStroke } = await import('./scene-stroke.ts')
         await checkSceneStroke(device, report)
       }
+      if (new URLSearchParams(location.search).has('large')) {
+        const { checkLargeSceneDispatch } = await import('./scene-training.ts')
+        await checkLargeSceneDispatch(device, report)
+      }
       const error = await device.popErrorScope()
       if (error) throw new Error(error.message)
       report('ALL PASSED')

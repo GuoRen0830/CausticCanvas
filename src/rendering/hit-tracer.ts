@@ -1,3 +1,4 @@
+import { workgroupGrid } from '../gpu/dispatch'
 import { buildSceneBvh } from './scene-bvh'
 import type { SceneMesh } from './scene-mesh'
 import type { TriangleBeamField } from '../contracts'
@@ -83,8 +84,7 @@ export function createHitTracer(
         pass.setBindGroup(1, fieldGroup)
         pass.setBindGroup(2, sceneGroup)
         const groups = Math.ceil(count / 64)
-        const width = Math.min(groups, device.limits.maxComputeWorkgroupsPerDimension)
-        pass.dispatchWorkgroups(width, Math.ceil(groups / width))
+        pass.dispatchWorkgroups(...workgroupGrid(groups, device.limits.maxComputeWorkgroupsPerDimension))
         pass.end()
         lastToken = token
         lastCount = count

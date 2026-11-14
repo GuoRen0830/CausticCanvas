@@ -1,4 +1,6 @@
-export async function initializeGPU(canvas: HTMLCanvasElement) {
+import type { LensState } from '../contracts'
+
+export async function initializeGPU(canvas: HTMLCanvasElement, lens: Pick<LensState, 'columns' | 'rows'>) {
   if (!navigator.gpu) {
     throw new Error('WebGPU is unavailable.')
   }
@@ -9,7 +11,15 @@ export async function initializeGPU(canvas: HTMLCanvasElement) {
     throw new Error('No GPU adapter available.')
   }
 
+  // Scene optics stores one vec4 per face for beams and another for gradients.
+  // Lens inspection also draws three uint32 indices per face.
+  const faces = 2 * (lens.columns - 1) * (lens.rows - 1)
+  const storageBytes = Math.max(faces * 16, lens.columns * lens.rows * 8)
+  if (storageBytes > adapter.limits.maxStorageBufferBindingSize || storageBytes > adapter.limits.maxBufferSize) {
+    throw new Error(`Lens ${lens.columns} x ${lens.rows} needs a ${storageBytes}-byte buffer. This GPU supports ${Math.min(adapter.limits.maxStorageBufferBindingSize, adapter.limits.maxBufferSize)} bytes per storage binding.`)
+  }
   const device = await adapter.requestDevice({
+    requiredLimits: { maxStorageBufferBindingSize: storageBytes, maxBufferSize: storageBytes },
     requiredFeatures: adapter.features.has('float32-blendable') ? ['float32-blendable'] : [],
   })
   const context = canvas.getContext('webgpu')

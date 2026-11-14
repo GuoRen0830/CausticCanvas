@@ -1,3 +1,4 @@
+import { workgroupGrid } from '../gpu/dispatch'
 import type { ForwardInput, ForwardModel, ForwardResult } from '../contracts'
 import type { DesignView } from './design-view'
 import { createScenePasses } from './scene-passes'
@@ -56,7 +57,7 @@ export async function createForwardModel(
   function allocate(label: string, size: number, usage: GPUBufferUsageFlags) {
     if (!Number.isSafeInteger(size) || size > device.limits.maxBufferSize ||
         ((usage & GPUBufferUsage.STORAGE) && size > device.limits.maxStorageBufferBindingSize)) {
-      throw new Error(`Optical buffer exceeds device limits: ${label}`)
+      throw new Error(`Optical buffer "${label}" needs ${size} bytes (device buffer limit ${device.limits.maxBufferSize}, storage binding limit ${device.limits.maxStorageBufferBindingSize}).`)
     }
     const buffer = device.createBuffer({ label, size, usage })
     buffers.push(buffer)
@@ -88,15 +89,15 @@ export async function createForwardModel(
 
   try {
     validate(initial)
-    const forwardGroups = cooperative ? Math.ceil(faceCount / (64 / lanes)) : Math.ceil(faceCount / 64)
-    if (forwardGroups > device.limits.maxComputeWorkgroupsPerDimension) {
-      throw new Error('Optical dispatch exceeds the device workgroup limit.')
-    }
+    const limit = device.limits.maxComputeWorkgroupsPerDimension
+    const faceGrid = workgroupGrid(Math.ceil(faceCount / 64), limit)
+    const vertexGrid = workgroupGrid(Math.ceil(vertexCount / 64), limit)
+    const forwardGrid = cooperative ? workgroupGrid(Math.ceil(faceCount / (64 / lanes)), limit) : faceGrid
     const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
     const beams = allocate('Triangle beams', faceCount * 16, storage)
     const image = allocate('Receiver irradiance', width * height * 4, storage)
     const triangleGradients = allocate('Triangle height derivatives', faceCount * 16, storage)
-    const scene = options.designView && await createScenePasses(device, options.designView, faceCount, vertexCount,
+    const scene = options.designView && await createScenePasses(device, options.designView, faceCount, faceGrid, vertexGrid,
       beams, image, triangleGradients, allocate)
     async function createPlanePasses() {
       const footprints = allocate('Projected footprints', strategy === 'baseline' ? 128 : faceCount * 128, storage)
@@ -156,13 +157,13 @@ export async function createForwardModel(
             const prepare = encoder.beginComputePass({ label: 'Project footprints', timestampWrites: options.timestamps?.('project') })
             prepare.setPipeline(project)
             prepare.setBindGroup(0, bind(input))
-            prepare.dispatchWorkgroups(Math.ceil(faceCount / 64))
+            prepare.dispatchWorkgroups(...faceGrid)
             prepare.end()
           }
           const pass = encoder.beginComputePass({ label: 'Forward optics', timestampWrites: options.timestamps?.('forward') })
           pass.setPipeline(forward)
           pass.setBindGroup(0, bind(input))
-          pass.dispatchWorkgroups(forwardGroups)
+          pass.dispatchWorkgroups(...forwardGrid)
           pass.end()
         }
         lastParameters = parameterKey(input)
@@ -198,12 +199,12 @@ export async function createForwardModel(
         const pass = encoder.beginComputePass({ label: 'Backward optics', timestampWrites: options.timestamps?.('backward') })
         pass.setBindGroup(0, group)
         pass.setPipeline(backward)
-        pass.dispatchWorkgroups(forwardGroups)
+        pass.dispatchWorkgroups(...forwardGrid)
         pass.end()
         const gatherPass = encoder.beginComputePass({ label: 'Gradient gather', timestampWrites: options.timestamps?.('gather') })
         gatherPass.setBindGroup(0, group)
         gatherPass.setPipeline(gather)
-        gatherPass.dispatchWorkgroups(Math.ceil(vertexCount / 64))
+        gatherPass.dispatchWorkgroups(...vertexGrid)
         gatherPass.end()
       },
 

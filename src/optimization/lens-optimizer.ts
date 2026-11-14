@@ -1,3 +1,4 @@
+import { workgroupGrid } from '../gpu/dispatch'
 import { config } from '../config'
 import type {
   CausticImage,
@@ -147,7 +148,9 @@ export async function createLensOptimizer(
   const vertexCount = lensMeta.columns * lensMeta.rows
   const pixelCount = receiver.width * receiver.height
   const lossGroups = Math.ceil(pixelCount / LOSS_WORKGROUP)
-  const vertexGroups = Math.ceil(vertexCount / VERTEX_WORKGROUP)
+  const limit = device.limits.maxComputeWorkgroupsPerDimension
+  const lossGrid = workgroupGrid(lossGroups, limit)
+  const vertexGrid = workgroupGrid(Math.ceil(vertexCount / VERTEX_WORKGROUP), limit)
 
   const owned: GPUBuffer[] = []
   const createBuffer = (label: string, size: number, usage: GPUBufferUsageFlags) => {
@@ -390,14 +393,14 @@ export async function createLensOptimizer(
         lossPass.setPipeline(result.caustic.kind === 'buffer' ? lossFromBuffer : lossFromTexture)
         lossPass.setBindGroup(0, lossBindings)
         lossPass.setBindGroup(1, causticBindingsFor(result.caustic))
-        lossPass.dispatchWorkgroups(lossGroups)
+        lossPass.dispatchWorkgroups(...lossGrid)
         lossPass.end()
 
         const filterPass = encoder.beginComputePass({ label: 'Optimizer loss filter' })
         filterPass.setBindGroup(0, lossBindings)
         for (const filter of [filterResidualX, filterResidualY, filterGradientY, filterGradientX]) {
           filterPass.setPipeline(filter)
-          filterPass.dispatchWorkgroups(lossGroups)
+          filterPass.dispatchWorkgroups(...lossGrid)
         }
         filterPass.end()
 
@@ -407,11 +410,11 @@ export async function createLensOptimizer(
         const updatePass = encoder.beginComputePass({ label: 'Optimizer update' })
         updatePass.setBindGroup(0, updateBindings)
         updatePass.setPipeline(computeCurvature)
-        updatePass.dispatchWorkgroups(vertexGroups)
+        updatePass.dispatchWorkgroups(...vertexGrid)
         updatePass.setPipeline(addRegularization)
-        updatePass.dispatchWorkgroups(vertexGroups)
+        updatePass.dispatchWorkgroups(...vertexGrid)
         updatePass.setPipeline(adamUpdate)
-        updatePass.dispatchWorkgroups(vertexGroups)
+        updatePass.dispatchWorkgroups(...vertexGrid)
         updatePass.setPipeline(advanceStep)
         updatePass.dispatchWorkgroups(1)
         updatePass.end()
