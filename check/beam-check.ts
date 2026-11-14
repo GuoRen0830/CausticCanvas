@@ -5,6 +5,7 @@ import { createBeamRenderer } from '../src/rendering/beam-renderer'
 import { createSceneRenderer } from '../src/rendering/scene-renderer'
 import type { BeamSource, BeamView } from '../src/rendering/beam-renderer'
 import type { ForwardResult } from '../src/contracts'
+import { checkSceneOcclusion } from './scene-occlusion'
 
 // Use the production geometry, optical solver, accumulation and comparison passes.
 // Float output at low exposure retains enough precision to invert the display map.
@@ -16,8 +17,9 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
   const input = { lens, receiver, optics: { lensIOR: 1.5, outsideIOR: 1, incidentIrradiance: 1 } }
   const forward = (await createForwardModel(device, input))!
   const exposure = 0.0001
-  const beam = createBeamRenderer(device, 'rgba32float', lensSpec, receiver, model, exposure)
-  const scene = createSceneRenderer(device, receiver, { center: [0.05, 0.03, 0.3], size: [0.08, 0.08, 0.1] }, model)
+  const box = { center: [0.05, 0.03, 0.3], size: [0.08, 0.08, 0.1] } as const
+  const beam = createBeamRenderer(device, 'rgba32float', lensSpec, receiver, model, exposure, box)
+  const scene = createSceneRenderer(device, receiver, box, model)
   // View along optical +Z with screen-right +X and screen-down +Y. The
   // receiver then faces the camera and a screen row equals an optical row.
   const clip = mat4.scaling([2 / receiver.sizeX, -2 / receiver.sizeY, 1])
@@ -34,16 +36,17 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
     device.queue.submit([encoder.finish()])
     return result
   }
-  async function readView(source: BeamSource, mode: BeamView) {
+  async function readView(source: BeamSource, mode: BeamView, camera = vp) {
     const encoder = device.createCommandEncoder()
-    scene.update(vp)
-    beam.render(encoder, output, vp, source, mode, result, scene.draw, blank)
+    scene.update(camera)
+    beam.render(encoder, output, camera, source, mode, result, scene.draw, blank)
     encoder.copyTextureToBuffer({ texture: output }, { buffer: staging, bytesPerRow: width * 16 }, [width, height])
     device.queue.submit([encoder.finish()])
     await staging.mapAsync(GPUMapMode.READ)
     const rgba = new Float32Array(staging.getMappedRange())
     const values = Float32Array.from({ length: width * height }, (_, i) => {
       const encoded = rgba[4 * i]
+      if (mode === 'lit') return encoded // Linear composite red, no display map.
       const mapped = encoded <= 0.04045 ? encoded / 12.92 : ((encoded + 0.055) / 1.055) ** 2.4
       return mapped / ((1 - mapped) * exposure)
     })
@@ -112,17 +115,24 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
             - 0.09 * Math.floor(i / lens.columns) * lens.sizeY / (lens.rows - 1)))
     const tilted = await compare('tilted lens', evaluate(), 0.002)
     const visible = await readView('solver', 'footprint')
+    const blocked = await readView('solver', 'blocked')
     let matched = 0
     for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
       const j = (height - 1 - y) * width + x
       if (x >= 66 && x <= 94 && y >= 36 && y <= 61) continue // Box silhouette.
       const value = tilted.plane[j]
       if (value < 0.5 || [-width, -1, 1, width].some(d => Math.abs(tilted.plane[j + d] - value) > 0.01)) continue
-      require(Math.abs(visible[y * width + x] - value) < 0.01, 'Tilted screen/plane mismatch')
+      const i = y * width + x
+      require(Math.abs(visible[i] + blocked[i] - value) < 0.01, 'Tilted visible + blocked floor/plane mismatch')
       matched++
     }
     require(matched > 500, 'Not enough visible tilted-floor samples')
-    report('PASS tilted scene and receiver agree at ' + matched + ' interior samples')
+    report('PASS tilted visible + blocked irradiance matches the plane at ' + matched + ' samples')
+    const reference = result!
+    await checkSceneOcclusion(device, receiver, model, async (field, mode, camera) => {
+      result = { ...reference, beams: field }
+      return readView('solver', mode, camera)
+    }, report)
     input.optics.incidentIrradiance = 0
     await compare('zero flux', evaluate(), 0.001)
     require((await readView('solver', 'footprint')).every(v => v === 0), 'Stale screen illumination')

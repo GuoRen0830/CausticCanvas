@@ -1,14 +1,15 @@
-import { mat4 } from 'wgpu-matrix'
+import { mat4, vec3 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
 import type { CausticImage, ForwardResult, ReceiverPlane } from '../contracts'
+import type { SceneBox } from './scene-renderer'
 import { createTestBeams } from './test-beams'
 import beamShader from './shaders/beam.wgsl?raw'
 import receiverShader from './shaders/receiver-compare.wgsl?raw'
 import displayColor from './shaders/irradiance-display.wgsl?raw'
 
 export type BeamSource = 'solver' | 'single' | 'pair'
-export type BeamView = 'lit' | 'candidates' | 'footprint' | 'plane' | 'difference'
-const modeId = { lit: 0, candidates: 1, footprint: 2, plane: 3, difference: 4 }
+export type BeamView = 'lit' | 'candidates' | 'footprint' | 'plane' | 'difference' | 'blocked'
+const modeId = { lit: 0, candidates: 1, footprint: 2, plane: 3, difference: 4, blocked: 5 }
 
 const clear = (view: GPUTextureView): GPURenderPassColorAttachment => ({
   view, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0],
@@ -17,13 +18,18 @@ const clear = (view: GPUTextureView): GPURenderPassColorAttachment => ({
 export function createBeamRenderer(
   device: GPUDevice, canvasFormat: GPUTextureFormat,
   aperture: { sizeX: number; sizeY: number; thickness: number },
-  receiver: ReceiverPlane, opticalToWorld: Mat4, exposure: number,
+  receiver: ReceiverPlane, opticalToWorld: Mat4, exposure: number, box: SceneBox,
 ) {
   const tests = createTestBeams(device, aperture)
-  const data = new Float32Array(48)
+  const data = new Float32Array(60)
   const words = new Uint32Array(data.buffer)
   const localVP = data.subarray(0, 16)
   const inverseLocalVP = data.subarray(16, 32)
+  // Shared scene geometry, in optical-local meters. Each uniform vec3 starts
+  // on a 16-byte boundary. Rotate the inspection light into this space once.
+  data.set(box.center.map((c, axis) => c - 0.5 * box.size[axis]), 48)
+  data.set(box.center.map((c, axis) => c + 0.5 * box.size[axis]), 52)
+  data.set(vec3.normalize(vec3.transformMat4Upper3x3([-0.4, 0.8, 0.6], mat4.inverse(opticalToWorld))), 56)
   const uniform = device.createBuffer({
     label: 'Beam frame', size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
@@ -55,7 +61,7 @@ export function createBeamRenderer(
       primitive: { topology: 'triangle-strip' },
     })
   }
-  const accumulate = beamPipeline('Accumulate visible floor samples', sceneLayout, 'accumulateFS')
+  const accumulate = beamPipeline('Accumulate visible scene beams', sceneLayout, 'accumulateFS')
   const integrate = beamPipeline('Integrate receiver texels', planeLayout, 'integrateFS')
   const composite = device.createRenderPipeline({
     label: 'Scene composite', layout: 'auto', vertex: { module, entryPoint: 'fullscreenVS' },
@@ -72,7 +78,7 @@ export function createBeamRenderer(
   }
   function screenTargets(width: number, height: number) {
     const albedo = texture('Scene albedo and occupancy', 'rgba8unorm', width, height)
-    const normal = texture('World normal and receiver mask', 'rgba8unorm', width, height)
+    const normal = texture('Optical-local normal and floor mask', 'rgba8unorm', width, height)
     const depth = texture('Scene depth', 'depth24plus', width, height)
     const light = texture('Beam irradiance and candidate count', 'rg16float', width, height)
     const albedoView = albedo.createView(), normalView = normal.createView()

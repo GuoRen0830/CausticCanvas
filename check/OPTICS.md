@@ -5,7 +5,7 @@ Run `npm ci`, then `npm run dev`. Open these paths on the local server in a WebG
 | Page | Coverage |
 | --- | --- |
 | `/check/optics-check.html` | Independent CPU image/flux comparisons, finite-difference gradients, output clearing, and resource contracts |
-| `/check/beam-check.html` | One/two-beam additivity, shared floor edges, non-square integrated receiver versus the forward image, asymmetric deformation and zero flux |
+| `/check/beam-check.html` | Beam additivity, shared edges, unobstructed receiver versus solver, box face irradiance, full and partial floor shadows, off-camera blockers and finite light paths |
 | `/check/optimizer-check.html` | Target normalization, loss and regularization gradients, Adam updates, and optimizer lifecycle |
 | `/check/loss-filter-check.html` | GPU Gaussian-filter gradients against CPU finite differences, including boundaries and non-square images |
 | `/check/integration-check.html?shape=circle` | Real A/B optimization, received power, stray light, stopping, clearing, warm restart, and final-preview consistency |

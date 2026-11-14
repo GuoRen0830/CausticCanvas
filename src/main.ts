@@ -183,7 +183,7 @@ async function main() {
     )
     sceneRenderer = sceneView
     const beamView = createBeamRenderer(
-      device, format, config.lens, state.receiver, opticalToWorld, config.rendering.causticExposure,
+      device, format, config.lens, state.receiver, opticalToWorld, config.rendering.causticExposure, config.scene.box,
     )
     beamRenderer = beamView
     let beamMode: BeamView = 'lit'
@@ -191,8 +191,9 @@ async function main() {
     const viewHelp: Record<BeamView, string> = {
       lit: cameraHelp.textContent ?? '',
       candidates: 'Candidate count · Blue 1 · Cyan 2 · Green 4 · Yellow 16 · Red 64+',
-      footprint: 'Visible floor irradiance · Same exposure as Caustic result',
-      plane: 'Floor only · Same texels, orientation and exposure as Caustic result',
+      footprint: 'Visible floor irradiance after box occlusion',
+      blocked: 'Floor irradiance intercepted by the box · Brighter means more light blocked',
+      plane: 'Unobstructed reference plane · Same texels, orientation and exposure as Caustic result',
       difference: '|Beam irradiance − solver irradiance| · Black = zero at display precision',
     }
     const changeView = () => {

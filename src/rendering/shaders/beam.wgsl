@@ -10,6 +10,9 @@ struct Frame {
   receiverZ: f32,
   mode: u32,
   exposure: f32,
+  boxMin: vec3f,
+  boxMax: vec3f,
+  inspectionDirection: vec3f,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -33,6 +36,10 @@ struct Bounds {
   @location(1) @interpolate(flat) b: vec2f,
   @location(2) @interpolate(flat) c: vec2f,
   @location(3) @interpolate(flat) irradiance: f32,
+  @location(4) @interpolate(flat) direction: vec3f,
+  @location(5) @interpolate(flat) sourcePoint: vec3f,
+  // Source normal divided by dot(normal, direction), for the distance back to Q.
+  @location(6) @interpolate(flat) sourceDepthGradient: vec3f,
 }
 
 fn cross2(a: vec2f, b: vec2f) -> f32 { return a.x * b.y - a.y * b.x; }
@@ -53,13 +60,16 @@ fn boundsVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u
   var hi = vec2f(-1e30);
   var nearClipped = false;
   var corners: array<vec2f, 3>;
+  var sources: array<vec3f, 3>;
+  let planeView = frame.mode == 3u || frame.mode == 4u;
   for (var j = 0u; j < 3u; j++) {
     let s = sourceVertex(ids[j]);
+    sources[j] = s;
     let t = (frame.receiverZ - s.z) / ray.z;
     if (!(t > 0.0)) { return out; }
     let foot = s.xy + t * ray.xy;
     corners[j] = (foot / frame.receiverSize + 0.5) * vec2f(frame.image);
-    if (frame.mode >= 3u) {
+    if (planeView) {
       let ndc = 2.0 * foot / frame.receiverSize;
       lo = min(lo, ndc);
       hi = max(hi, ndc);
@@ -84,8 +94,16 @@ fn boundsVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u
   out.c = select(corners[1], corners[2], doubleArea > 0.0);
   let pixelSize = frame.receiverSize / vec2f(frame.image);
   out.irradiance = ray.w / (0.5 * abs(doubleArea) * pixelSize.x * pixelSize.y);
+  if (!planeView) {
+    let normal = cross(sources[1] - sources[0], sources[2] - sources[0]);
+    let projection = dot(normal, ray.xyz);
+    if (projection == 0.0) { return out; }
+    out.direction = ray.xyz;
+    out.sourcePoint = sources[0];
+    out.sourceDepthGradient = normal / projection;
+  }
 
-  let pad = 2.0 / select(frame.targetSize, vec2f(frame.image), frame.mode >= 3u);
+  let pad = 2.0 / select(frame.targetSize, vec2f(frame.image), planeView);
   lo = clamp(lo - pad, vec2f(-1), vec2f(1));
   hi = clamp(hi + pad, vec2f(-1), vec2f(1));
   if (nearClipped) { lo = vec2f(-1); hi = vec2f(1); }
@@ -104,19 +122,65 @@ fn insideEdge(a: vec2f, b: vec2f, p: vec2f) -> bool {
   return edge < 0.0;
 }
 
-@fragment
-fn accumulateFS(input: Bounds) -> @location(0) vec4f {
-  let pixel = vec2i(input.position.xy);
-  var e = 0.0;
-  if (textureLoad(normalAndFloor, pixel, 0).a > 0.5) {
-    let uv = input.position.xy / frame.targetSize;
-    let ndc = uv * vec2f(2, -2) + vec2f(-1, 1);
-    let h = frame.inverseLocalVP * vec4f(ndc, textureLoad(sceneDepth, pixel, 0), 1);
-    let p = (h.xy / h.w / frame.receiverSize + 0.5) * vec2f(frame.image);
-    if (insideEdge(input.a, input.b, p) && insideEdge(input.b, input.c, p) && insideEdge(input.c, input.a, p)) {
-      e = input.irradiance;
+// Intersect the open light-path segment P - t*d, 0 < t < distance(P,Q),
+// with the interior of the box. A tangent touching one edge blocks no energy.
+fn boxBlocks(p: vec3f, d: vec3f, distanceToSource: f32) -> bool {
+  var enter = 0.0;
+  var leave = distanceToSource;
+  for (var axis = 0u; axis < 3u; axis++) {
+    let lo = frame.boxMin[axis];
+    let hi = frame.boxMax[axis];
+    if (d[axis] == 0.0) {
+      if (p[axis] <= lo || p[axis] >= hi) { return false; }
+    } else {
+      let t0 = (p[axis] - lo) / d[axis];
+      let t1 = (p[axis] - hi) / d[axis];
+      enter = max(enter, min(t0, t1));
+      leave = min(leave, max(t0, t1));
     }
   }
+  return enter < leave;
+}
+
+fn sceneIrradiance(input: Bounds) -> f32 {
+  let pixel = vec2i(input.position.xy);
+  let depth = textureLoad(sceneDepth, pixel, 0);
+  if (depth >= 1.0) { return 0.0; }
+  let surface = textureLoad(normalAndFloor, pixel, 0);
+  let floor = surface.a > 0.5;
+  if (!floor && (frame.mode == 2u || frame.mode == 5u)) { return 0.0; }
+  let n = normalize((surface.xyz * 255.0 - 128.0) / 127.0);
+  let d = input.direction;
+  let cosine = dot(n, -d);
+  if (cosine <= 0.0) { return 0.0; }
+
+  let uv = input.position.xy / frame.targetSize;
+  let ndc = uv * vec2f(2, -2) + vec2f(-1, 1);
+  let h = frame.inverseLocalVP * vec4f(ndc, depth, 1);
+  var p = h.xyz / h.w;
+  if (floor) { p.z = frame.receiverZ; } // The planar receiver depth is known exactly.
+  if (p.z > frame.receiverZ) { return 0.0; }
+  // All points on one beam ray project onto the same receiver coordinate.
+  // This reuses the half-open coverage test, including for vertical box faces.
+  let foot = p.xy + (frame.receiverZ - p.z) * (d.xy / d.z);
+  let f = (foot / frame.receiverSize + 0.5) * vec2f(frame.image);
+  if (!(insideEdge(input.a, input.b, f) && insideEdge(input.b, input.c, f) && insideEdge(input.c, input.a, f))) {
+    return 0.0;
+  }
+  let distanceToSource = dot(p - input.sourcePoint, input.sourceDepthGradient);
+  if (distanceToSource <= 0.0) { return 0.0; }
+  // A convex box cannot block its own incoming ray on a front-facing face.
+  // For the floor, the same box can lie anywhere between the lens and P.
+  let blocked = floor && boxBlocks(p, d, distanceToSource);
+  if (blocked != (frame.mode == 5u)) { return 0.0; }
+  // E_floor = flux / A_floor and A_perp = A_floor * d.z.
+  return input.irradiance * (cosine / d.z);
+}
+
+@fragment
+fn accumulateFS(input: Bounds) -> @location(0) vec4f {
+  var e = 0.0;
+  if (frame.mode != 1u) { e = sceneIrradiance(input); }
   return vec4f(e, 1, 0, 0);
 }
 
@@ -144,11 +208,11 @@ fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     color = mix(color, red, clamp(0.5 * (level - 4.0), 0.0, 1.0));
     return vec4f(color, 1);
   }
-  if (frame.mode == 2u) { return displayColor(light.r, frame.exposure); }
+  if (frame.mode == 2u || frame.mode == 5u) { return displayColor(light.r, frame.exposure); }
   let base = textureLoad(albedo, pixel, 0);
   if (base.a == 0.0) { return vec4f(0.03, 0.18, 0.22, 1); }
   let n = normalize((textureLoad(normalAndFloor, pixel, 0).xyz * 255.0 - 128.0) / 127.0);
-  let inspection = 0.25 + 0.75 * max(dot(n, normalize(vec3f(-0.4, 0.8, 0.6))), 0.0);
+  let inspection = 0.25 + 0.75 * max(dot(n, frame.inspectionDirection), 0.0);
   let beamDiffuse = vec3f(1.0, 0.78, 0.38) * (light.r / 3.14159265);
   return vec4f(base.rgb * (vec3f(inspection) + beamDiffuse), 1);
 }

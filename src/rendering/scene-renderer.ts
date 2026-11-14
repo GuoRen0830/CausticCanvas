@@ -5,7 +5,7 @@ import sceneShaderSource from './shaders/scene.wgsl?raw'
 
 type Triple = readonly [number, number, number]
 
-interface SceneBox {
+export interface SceneBox {
   // Lens-local coordinates and full dimensions, in meters.
   center: Triple
   size: Triple
@@ -87,13 +87,10 @@ export function createSceneRenderer(
   device.queue.writeBuffer(vertexBuffer, 0, mesh.vertices)
   device.queue.writeBuffer(indexBuffer, 0, mesh.indices)
 
-  // Two mat4 values: MVP at byte 0, local-to-world at byte 64.
-  const data = new Float32Array(32)
-  const mvp = data.subarray(0, 16)
-  data.set(model, 16)
+  const mvp = mat4.identity()
   const uniformBuffer = device.createBuffer({
     label: 'Scene uniforms',
-    size: data.byteLength,
+    size: mvp.byteLength,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   const module = device.createShaderModule({
@@ -119,7 +116,7 @@ export function createSceneRenderer(
     fragment: {
       module,
       entryPoint: 'fragmentMain',
-      // Base color + occupancy, world normal + floor receiver mask.
+      // Base color + occupancy, optical-local normal + floor mask.
       targets: [{ format: 'rgba8unorm' }, { format: 'rgba8unorm' }],
     },
     primitive: {
@@ -142,7 +139,7 @@ export function createSceneRenderer(
   return {
     update(viewProjection: Mat4) {
       mat4.multiply(viewProjection, model, mvp)
-      device.queue.writeBuffer(uniformBuffer, 0, data)
+      device.queue.writeBuffer(uniformBuffer, 0, mvp)
     },
 
     draw(pass: GPURenderPassEncoder) {
