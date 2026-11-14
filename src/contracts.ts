@@ -101,7 +101,10 @@ export interface ForwardResult {
   // Snapshot of the receiver used for this evaluation.
   readonly receiver: Readonly<ReceiverPlane>
 
-  // Plane irradiance generated from these beams, at the receiver resolution.
+  // Optional BVH first hits for this exact mesh and beam evaluation.
+  readonly firstHits?: { readonly mesh: object; readonly buffer: GPUBuffer; readonly triangles: GPUBuffer }
+
+  // Light-view scene irradiance, or unobstructed plane irradiance in plane mode, generated from these beams, at the receiver resolution.
   // Each call replaces prior values; no accumulation across evaluations.
   // Export buffers with STORAGE usage, or textures with TEXTURE_BINDING usage.
   readonly caustic: CausticImage
@@ -112,6 +115,10 @@ export interface ForwardResult {
 }
 
 export interface ForwardModel {
+  // Fixed physical area (m^2) per design pixel, zero for background.
+  // Models without a scene use the uniform pixel area of the reference plane.
+  readonly targetSurfaceAreas?: Float32Array
+
   // Keep the caustic image kind stable for this model instance.
   // Pipelines must be ready; all resources must use the encoder's device.
   // Call between passes; record a full evaluation and close all opened passes.
@@ -154,7 +161,7 @@ export interface LensOptimizer {
   // Upload new target versions once; never modify the caller's values.
   // A new version starts a new run; unchanged versions preserve progress.
   // Normalize weights to P = incidentIrradiance * lens.sizeX * lens.sizeY.
-  // For pixel area dA, target E[i] = P * weight[i] / (dA * sum(weights)).
+  // For pixel area dA, target E[i] = P * weight[i] / sum(weight[j] * dA[j]).
   // Do not normalize by the current received power or display exposure.
   // Null or all-zero targets disable updates without resetting the lens.
   setTarget(target: Readonly<TargetImage> | null): void
@@ -190,6 +197,6 @@ export interface AppState {
   // Optical inputs shared by the forward model and optimizer.
   optics: OpticalConfig
 
-  // Reference plane used for the caustic image.
+  // Reference plane and XY extent of the fixed design view.
   receiver: ReceiverPlane
 }

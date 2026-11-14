@@ -16,7 +16,7 @@
       <main id="workspace">
         <aside id="design-panel">
           <h2>Design the light</h2>
-          <p>Draw a pattern with the white brush.</p>
+          <p>Paint on the scene as seen from the light.</p>
 
           <canvas id="target-canvas" aria-label="Light pattern drawing pad"></canvas>
 
@@ -24,16 +24,42 @@
           <p id="target-status">Draw a pattern to begin.</p>
 
           <section id="caustic-panel">
-            <h2>Caustic result</h2>
+            <h2>Light-view irradiance</h2>
             <canvas
               id="caustic-canvas"
-              aria-label="Receiver irradiance preview"
+              aria-label="Scene irradiance from the fixed light view"
             ></canvas>
             <p id="caustic-status">Waiting for solver output.</p>
           </section>
         </aside>
 
         <section id="viewport">
+          <div id="beam-control">
+            <label>Light source
+              <select id="beam-source">
+                <option value="solver">Solver beams</option>
+                <option value="single">Single test beam</option>
+                <option value="pair">Two overlapping beams</option>
+              </select>
+            </label>
+            <label>Scene lighting
+              <select id="scene-method">
+                <option value="first-hit">BVH first hit</option>
+                <option value="analytic">Box reference</option>
+              </select>
+            </label>
+            <label>View
+              <select id="beam-view">
+                <option value="lit">Lit scene</option>
+                <option value="lens">Lens shape</option>
+                <option value="candidates">Candidate pixels</option>
+                <option value="footprint">Floor footprint</option>
+                <option value="blocked">Blocked irradiance (box reference)</option>
+                <option value="plane">Unobstructed plane</option>
+                <option value="difference">Scene vs. plane difference</option>
+              </select>
+            </label>
+          </div>
           <canvas
             id="gpu-canvas"
             aria-label="Interactive scene preview"

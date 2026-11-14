@@ -1,5 +1,6 @@
 import type { CausticImage } from '../contracts'
 import shaderSource from './shaders/caustic-display.wgsl?raw'
+import displayColor from './shaders/irradiance-display.wgsl?raw'
 
 async function createCausticPipeline(
   device: GPUDevice,
@@ -40,7 +41,7 @@ async function createCausticPipeline(
 
   const module = device.createShaderModule({
     label: 'Caustic display shader',
-    code: shaderSource,
+    code: displayColor + shaderSource,
   })
 
   const pipeline = await device.createRenderPipelineAsync({

@@ -6,13 +6,17 @@ import { createDrawingPad } from './ui/drawing-pad'
 import { createFlatLens } from './geometry/lens-mesh'
 import { createLensRenderer } from './rendering/lens-renderer'
 import { createOrbitCamera } from './rendering/orbit-camera'
+import { buildSceneMesh } from './rendering/scene-mesh'
 import { createSceneRenderer } from './rendering/scene-renderer'
+import { createBeamRenderer } from './rendering/beam-renderer'
+import type { BeamSource, BeamView } from './rendering/beam-renderer'
 import { createCausticDisplay } from './rendering/caustic-display'
 import { createFrameLoop } from './frame-loop'
 import { createSimulation } from './simulation'
+import { buildDesignView } from './optics/design-view'
 import { createForwardModel } from './optics/forward-model'
 import { createLensOptimizer } from './optimization/lens-optimizer'
-import type { AppState, ForwardModel, ForwardResult, LensOptimizer } from './contracts'
+import type { AppState, ForwardModel, LensOptimizer } from './contracts'
 
 async function main() {
   const canvas = document.querySelector('#gpu-canvas')
@@ -22,6 +26,10 @@ async function main() {
   const targetCanvas = document.querySelector('#target-canvas')
   const clearButton = document.querySelector('#clear-target')
   const targetStatus = document.querySelector('#target-status')
+  const methodSelect = document.querySelector('#scene-method')
+  const beamSelect = document.querySelector('#beam-view')
+  const sourceSelect = document.querySelector('#beam-source')
+  const cameraHelp = document.querySelector('#camera-help')
 
   if (
     !(canvas instanceof HTMLCanvasElement) ||
@@ -30,7 +38,11 @@ async function main() {
     !(causticStatusElement instanceof HTMLElement) ||
     !(targetCanvas instanceof HTMLCanvasElement) ||
     !(clearButton instanceof HTMLButtonElement) ||
-    !(targetStatus instanceof HTMLElement)
+    !(targetStatus instanceof HTMLElement) ||
+    !(methodSelect instanceof HTMLSelectElement) ||
+    !(beamSelect instanceof HTMLSelectElement) ||
+    !(sourceSelect instanceof HTMLSelectElement) ||
+    !(cameraHelp instanceof HTMLElement)
   ) {
     throw new Error('Missing application controls.')
   }
@@ -38,17 +50,15 @@ async function main() {
   const status = statusElement
   const causticStatus = causticStatusElement
 
-  const { device, context, format } = await initializeGPU(canvas)
+  const { device, context, format } = await initializeGPU(canvas, config.lens)
   const events = new AbortController()
   let disposed = false
   let hasTarget = false
   let optimizationDone = false
   let initialHeightBuffer: GPUBuffer | null = null
-  let depthTexture: GPUTexture | null = null
+  let beamRenderer: ReturnType<typeof createBeamRenderer> | null = null
   let forward: ForwardModel | null = null
   let optimizer: LensOptimizer | null = null
-  let lastResult: ForwardResult | null = null
-  let startupEncoder: GPUCommandEncoder | null = null
   let drawingPad: ReturnType<typeof createDrawingPad> | null = null
   let lensRenderer: ReturnType<typeof createLensRenderer> | null = null
   let causticDisplay: ReturnType<typeof createCausticDisplay> | null = null
@@ -63,8 +73,6 @@ async function main() {
     frameLoop?.destroy()
     camera?.destroy()
     drawingPad?.destroy()
-    startupEncoder = null
-    lastResult = null
 
     try {
       lensRenderer?.destroy()
@@ -72,7 +80,7 @@ async function main() {
       causticDisplay?.destroy()
       optimizer?.destroy()
       forward?.destroy()
-      depthTexture?.destroy()
+      beamRenderer?.destroy()
       initialHeightBuffer?.destroy()
     } finally {
       device.destroy()
@@ -120,10 +128,10 @@ async function main() {
       const running = optimizer !== null && hasTarget && !optimizationDone
       frameLoop.setRunning(running)
 
-      if (!forward) {
-        causticStatus.textContent = 'Forward model not implemented.'
-      } else if (!optimizer) {
-        causticStatus.textContent = 'Forward preview. Optimizer not implemented.'
+      if (!optimizer) {
+        causticStatus.textContent = state.optics.incidentIrradiance === 0
+          ? 'Source is off.'
+          : 'Forward preview only.'
       } else if (!hasTarget) {
         causticStatus.textContent = 'Draw a pattern to optimize.'
       } else {
@@ -133,6 +141,8 @@ async function main() {
       }
     }
 
+    const mesh = buildSceneMesh(state.receiver, config.scene.box)
+    const designView = buildDesignView(mesh, state.receiver)
     drawingPad = createDrawingPad(targetCanvas, state.receiver, (target) => {
       // Keep only the latest target; upload it at the next batch boundary.
       state.target = target
@@ -143,7 +153,7 @@ async function main() {
         : 'Draw a pattern to begin.'
       updateRunState()
       frameLoop?.requestFrame()
-    })
+    }, designView)
     clearButton.addEventListener('click', drawingPad.clear, { signal: events.signal })
 
     const causticContext = causticCanvas.getContext('webgpu')
@@ -168,12 +178,41 @@ async function main() {
     }, () => frameLoop?.requestFrame())
     camera = orbitCamera
 
-    const lensView = createLensRenderer(device, format, state.lens, opticalToWorld)
-    lensRenderer = lensView
     const sceneView = createSceneRenderer(
-      device, format, state.receiver, config.scene.box, opticalToWorld,
+      device, state.receiver, config.scene.box, opticalToWorld, mesh,
     )
     sceneRenderer = sceneView
+    const beamView = createBeamRenderer(
+      device, format, config.lens, state.receiver, opticalToWorld, config.rendering.causticExposure, config.scene.box, mesh,
+    )
+    beamRenderer = beamView
+    let beamMode: BeamView = 'lit'
+    let beamSource: BeamSource = 'solver'
+    const viewHelp: Record<BeamView, string> = {
+      lit: cameraHelp.textContent ?? '',
+      lens: 'Inspect the lens surface · Drag to orbit · Scroll to zoom',
+      candidates: 'Candidate count · Blue 1 · Cyan 2 · Green 4 · Yellow 16 · Red 64+',
+      footprint: 'Visible floor irradiance after scene occlusion',
+      blocked: 'Floor irradiance intercepted by the box · Brighter means more light blocked',
+      plane: 'Irradiance these beams would produce on the unobstructed reference plane',
+      difference: 'Absolute irradiance difference between the scene and the unobstructed plane',
+    }
+    const changeView = () => {
+      const source = sourceSelect.value
+      if (source === 'single' || source === 'pair' || source === 'solver') beamSource = source
+      for (const value of ['plane', 'difference']) {
+        beamSelect.querySelector<HTMLOptionElement>(`option[value="${value}"]`)!.disabled = beamSource !== 'solver'
+      }
+      if (beamSource !== 'solver' && ['plane', 'difference'].includes(beamSelect.value)) beamSelect.value = 'footprint'
+      beamMode = beamSelect.value as BeamView
+      sourceSelect.disabled = beamMode === 'lens'
+      methodSelect.disabled = ['plane', 'difference', 'blocked', 'lens'].includes(beamMode)
+      cameraHelp.textContent = viewHelp[beamMode]
+      frameLoop?.requestFrame()
+    }
+    methodSelect.addEventListener('change', changeView, { signal: events.signal })
+    sourceSelect.addEventListener('change', changeView, { signal: events.signal })
+    beamSelect.addEventListener('change', changeView, { signal: events.signal })
     const causticView = createCausticDisplay(device, format)
     causticDisplay = causticView
     causticView.setExposure(config.rendering.causticExposure)
@@ -185,28 +224,26 @@ async function main() {
       optics: { ...state.optics },
       receiver: { ...state.receiver },
     }
-    forward = await createForwardModel(device, initial)
+    forward = await createForwardModel(device, initial, { designView })
     if (disposed) {
-      forward?.destroy()
+      forward.destroy()
       return
     }
 
-    let simulation: ReturnType<typeof createSimulation> | null = null
-    if (forward) {
-      optimizer = await createLensOptimizer(device, initial, forward)
-      if (disposed) {
-        optimizer?.destroy()
-        return
-      }
-      simulation = createSimulation(state, forward, optimizer ?? undefined)
-
-      // Record the first evaluation now; submit it with the first rendered frame.
-      startupEncoder = device.createCommandEncoder({ label: 'Initial optical frame' })
-      lastResult = simulation.encode(startupEncoder, 0).result
-      await causticView.prepare(lastResult.caustic.kind)
-      if (disposed) return
-      causticView.setImage(lastResult.caustic)
+    optimizer = await createLensOptimizer(device, initial, forward)
+    if (disposed) {
+      optimizer?.destroy()
+      return
     }
+    const simulation = createSimulation(state, forward, optimizer ?? undefined)
+
+    // Record the first evaluation now; submit it with the first rendered frame.
+    let startupEncoder: GPUCommandEncoder | null = device.createCommandEncoder({ label: 'Initial optical frame' })
+    let lastResult = simulation.encode(startupEncoder, 0).result
+    await causticView.prepare(lastResult.caustic.kind)
+    if (disposed) return
+    causticView.setImage(lastResult.caustic)
+    changeView()
 
     const encodeFrame = (steps: number) => {
       const initialFrame = startupEncoder !== null
@@ -217,7 +254,7 @@ async function main() {
       optimizer?.setTarget(state.target)
 
       // A pure redraw reuses the last result; running frames evaluate updated heights.
-      if (simulation && !initialFrame && steps > 0) {
+      if (!initialFrame && steps > 0) {
         const batch = simulation.encode(encoder, steps)
         lastResult = batch.result
         causticView.setImage(lastResult.caustic)
@@ -238,40 +275,22 @@ async function main() {
         Math.max(1, Math.round(canvas.clientHeight * pixelRatio)),
       )
 
-      if (!depthTexture || canvas.width !== width || canvas.height !== height) {
+      if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width
         canvas.height = height
-        depthTexture?.destroy()
-        depthTexture = device.createTexture({
-          label: 'Viewport depth',
-          size: [width, height],
-          format: 'depth24plus',
-          usage: GPUTextureUsage.RENDER_ATTACHMENT,
-        })
       }
 
       // Bind the geometry that produced the displayed caustic image.
       const viewProjection = orbitCamera.update(width / height)
-      lensView.update(lastResult?.beams.lens ?? state.lens, viewProjection)
+      if (beamMode === 'lens') {
+        lensRenderer ??= createLensRenderer(device, format, state.lens, opticalToWorld)
+        lensRenderer.update(state.lens, viewProjection)
+      }
       sceneView.update(viewProjection)
-      const pass = encoder.beginRenderPass({
-        colorAttachments: [{
-          view: context.getCurrentTexture().createView(),
-          clearValue: { r: 0.03, g: 0.18, b: 0.22, a: 1 },
-          loadOp: 'clear',
-          storeOp: 'store',
-        }],
-        depthStencilAttachment: {
-          view: depthTexture.createView(),
-          depthClearValue: 1,
-          depthLoadOp: 'clear',
-          depthStoreOp: 'discard',
-        },
-      })
-      // One shared depth attachment resolves visibility across both pipelines.
-      sceneView.draw(pass)
-      lensView.draw(pass)
-      pass.end()
+      beamView.render(
+        encoder, context.getCurrentTexture(), viewProjection, beamSource, beamMode, lastResult,
+        sceneView.draw, pass => lensRenderer?.draw(pass), methodSelect.value === 'analytic' ? 'analytic' : 'first-hit',
+      )
 
       const causticPass = encoder.beginRenderPass({
         label: 'Caustic preview',

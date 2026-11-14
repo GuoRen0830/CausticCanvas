@@ -1,3 +1,4 @@
+import { workgroupGrid } from '../gpu/dispatch'
 import { config } from '../config'
 import type {
   CausticImage,
@@ -22,11 +23,12 @@ export function incidentPower(input: ForwardInput): number {
   return input.optics.incidentIrradiance * input.lens.sizeX * input.lens.sizeY
 }
 
-// Target irradiance E[i] = P * w[i] / (dA * sum(w)); null for empty targets.
+// Normalize incident power over the physical surface area represented by each pixel.
 export function normalizeTarget(
   target: Readonly<TargetImage>,
   receiver: Readonly<ReceiverPlane>,
   power: number,
+  surfaceAreas?: Float32Array,
 ): Float32Array | null {
   if (target.width !== receiver.width || target.height !== receiver.height) {
     throw new Error('Target size must match the receiver resolution.')
@@ -34,19 +36,21 @@ export function normalizeTarget(
   if (target.values.length !== target.width * target.height) {
     throw new Error('Target values do not match the target size.')
   }
-  let sum = 0
-  for (const value of target.values) {
+  if (surfaceAreas && surfaceAreas.length !== target.values.length) throw new Error('Invalid surface area map.')
+  const pixelArea = (receiver.sizeX / receiver.width) * (receiver.sizeY / receiver.height)
+  let weightedArea = 0
+  for (let i = 0; i < target.values.length; i++) {
+    const value = target.values[i]
     if (!Number.isFinite(value) || value < 0) {
       throw new Error('Target weights must be finite and nonnegative.')
     }
-    sum += value
+    weightedArea += value * (surfaceAreas?.[i] ?? pixelArea)
   }
-  if (sum <= 0) return null
-  const pixelArea = (receiver.sizeX / receiver.width) * (receiver.sizeY / receiver.height)
-  const scale = power / (pixelArea * sum)
+  if (weightedArea <= 0) return null
+  const scale = power / weightedArea
   const normalized = new Float32Array(target.values.length)
   for (let i = 0; i < normalized.length; i++) {
-    normalized[i] = target.values[i] * scale
+    normalized[i] = surfaceAreas?.[i] === 0 ? 0 : target.values[i] * scale
   }
   return normalized
 }
@@ -138,12 +142,15 @@ export async function createLensOptimizer(
   const lensMeta = { ...initial.lens }
   const receiver = { ...initial.receiver }
   const power = incidentPower(initial)
-  if (!(power > 0)) throw new Error('Incident power must be positive.')
+  if (!Number.isFinite(power) || power < 0) throw new Error('Invalid incident power.')
+  if (power === 0) return null
 
   const vertexCount = lensMeta.columns * lensMeta.rows
   const pixelCount = receiver.width * receiver.height
   const lossGroups = Math.ceil(pixelCount / LOSS_WORKGROUP)
-  const vertexGroups = Math.ceil(vertexCount / VERTEX_WORKGROUP)
+  const limit = device.limits.maxComputeWorkgroupsPerDimension
+  const lossGrid = workgroupGrid(lossGroups, limit)
+  const vertexGrid = workgroupGrid(Math.ceil(vertexCount / VERTEX_WORKGROUP), limit)
 
   const owned: GPUBuffer[] = []
   const createBuffer = (label: string, size: number, usage: GPUBufferUsageFlags) => {
@@ -308,12 +315,15 @@ export async function createLensOptimizer(
     // which the caller makes only after submitting the previous batch.
     // Mapping inside encodeStep would invalidate a multi-step batch.
     let lossState: 'idle' | 'copied' | 'mapping' = 'idle'
+    let targetRun = 0
+    let lossRun = 0
     let lossIteration = 0
     const lossHistory: { iteration: number, loss: number }[] = []
     const flushLossReadback = () => {
       if (lossState !== 'copied' || destroyed) return
       lossState = 'mapping'
       const loggedIteration = lossIteration
+      const loggedRun = lossRun
       lossStaging.mapAsync(GPUMapMode.READ).then(() => {
         if (destroyed) return
         const values = new Float32Array(lossStaging.getMappedRange())
@@ -321,10 +331,11 @@ export async function createLensOptimizer(
         for (const value of values) loss += value
         lossStaging.unmap()
         lossState = 'idle'
+        if (loggedRun !== targetRun) return
         lossHistory.push({ iteration: loggedIteration, loss })
         console.info(`[optimizer] iteration ${loggedIteration} loss ${loss.toExponential(4)}`)
       }, () => {
-        // Device loss or destruction; logging is diagnostic only.
+        lossState = 'idle'
       })
     }
 
@@ -335,14 +346,16 @@ export async function createLensOptimizer(
         if (destroyed) return
         flushLossReadback()
         if (!target) {
+          if (targetVersion !== null) targetRun++
           targetVersion = null
           active = false
           done = true
           return
         }
         if (target.version === targetVersion) return
+        const normalized = normalizeTarget(target, receiver, power, forward.targetSurfaceAreas)
         targetVersion = target.version
-        const normalized = normalizeTarget(target, receiver, power)
+        targetRun++
         active = normalized !== null
         done = !active
         if (!normalized) return
@@ -380,14 +393,14 @@ export async function createLensOptimizer(
         lossPass.setPipeline(result.caustic.kind === 'buffer' ? lossFromBuffer : lossFromTexture)
         lossPass.setBindGroup(0, lossBindings)
         lossPass.setBindGroup(1, causticBindingsFor(result.caustic))
-        lossPass.dispatchWorkgroups(lossGroups)
+        lossPass.dispatchWorkgroups(...lossGrid)
         lossPass.end()
 
         const filterPass = encoder.beginComputePass({ label: 'Optimizer loss filter' })
         filterPass.setBindGroup(0, lossBindings)
         for (const filter of [filterResidualX, filterResidualY, filterGradientY, filterGradientX]) {
           filterPass.setPipeline(filter)
-          filterPass.dispatchWorkgroups(lossGroups)
+          filterPass.dispatchWorkgroups(...lossGrid)
         }
         filterPass.end()
 
@@ -397,11 +410,11 @@ export async function createLensOptimizer(
         const updatePass = encoder.beginComputePass({ label: 'Optimizer update' })
         updatePass.setBindGroup(0, updateBindings)
         updatePass.setPipeline(computeCurvature)
-        updatePass.dispatchWorkgroups(vertexGroups)
+        updatePass.dispatchWorkgroups(...vertexGrid)
         updatePass.setPipeline(addRegularization)
-        updatePass.dispatchWorkgroups(vertexGroups)
+        updatePass.dispatchWorkgroups(...vertexGrid)
         updatePass.setPipeline(adamUpdate)
-        updatePass.dispatchWorkgroups(vertexGroups)
+        updatePass.dispatchWorkgroups(...vertexGrid)
         updatePass.setPipeline(advanceStep)
         updatePass.dispatchWorkgroups(1)
         updatePass.end()
@@ -414,6 +427,7 @@ export async function createLensOptimizer(
         ) {
           encoder.copyBufferToBuffer(lossPartials, 0, lossStaging, 0, lossGroups * 4)
           lossState = 'copied'
+          lossRun = targetRun
           lossIteration = iteration - 1
         }
 

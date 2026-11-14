@@ -55,21 +55,6 @@ fn pixelFromUV(uv: vec2<f32>) -> vec2<u32> {
   return min(pixel, display.imageSize - vec2<u32>(1u));
 }
 
-fn displayColor(irradiance: f32) -> vec4<f32> {
-  // Apply exposure and compress the display range.
-  let scaled = max(irradiance, 0.0) * display.exposure;
-  let mapped = scaled / (1.0 + scaled);
-
-  // Encode for the current non-sRGB UNORM canvas view.
-  let encoded = select(
-    12.92 * mapped,
-    1.055 * pow(mapped, 1.0 / 2.4) - 0.055,
-    mapped > 0.0031308,
-  );
-
-  return vec4<f32>(vec3<f32>(encoded), 1.0);
-}
-
 @fragment
 fn fragmentBuffer(
   @location(0) uv: vec2<f32>,
@@ -77,7 +62,7 @@ fn fragmentBuffer(
   let pixel = pixelFromUV(uv);
   let index = pixel.y * display.imageSize.x + pixel.x;
 
-  return displayColor(imageBuffer[index]);
+  return displayColor(imageBuffer[index], display.exposure);
 }
 
 @fragment
@@ -87,5 +72,5 @@ fn fragmentTexture(
   let pixel = pixelFromUV(uv);
   let irradiance = textureLoad(imageTexture, pixel, 0).r;
 
-  return displayColor(irradiance);
+  return displayColor(irradiance, display.exposure);
 }

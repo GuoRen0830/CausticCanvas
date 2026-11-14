@@ -21,7 +21,7 @@ async function run() {
   const device = await adapter.requestDevice()
   const errors: string[] = []
   device.addEventListener('uncapturederror', e => errors.push(e.error.message))
-  const initialLens = createFlatLens(device, config.lens)
+  const initialLens = createFlatLens(device, { ...config.lens, columns: 33, rows: 33 })
   const state: AppState = { lens: initialLens, optics: { ...config.optics }, receiver: { ...config.receiver }, target: null }
   const strategy = new URLSearchParams(location.search).get('strategy')
   const forward = (await createForwardModel(device, state, {

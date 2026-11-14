@@ -54,7 +54,7 @@ fn fragmentMain(
   // Framebuffer Y points down, so reverse the cross-product order.
   let normal = normalize(cross(tangentY, tangentX));
 
-  // Use the same world-space inspection light as the scene.
+  // Directional shading for the dedicated lens inspection view.
   let toLight = normalize(vec3<f32>(-0.4, 0.8, 0.6));
   // Two-sided inspection shading keeps either side readable.
   let diffuse = abs(dot(normal, toLight));
