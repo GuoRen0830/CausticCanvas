@@ -98,7 +98,7 @@ export async function createForwardModel(
     const image = allocate('Receiver irradiance', width * height * 4, storage)
     const triangleGradients = allocate('Triangle height derivatives', faceCount * 16, storage)
     const scene = options.designView && await createScenePasses(device, options.designView, faceCount, faceGrid, vertexGrid,
-      beams, image, triangleGradients, allocate)
+      beams, image, triangleGradients, allocate, options.timestamps)
     async function createPlanePasses() {
       const footprints = allocate('Projected footprints', strategy === 'baseline' ? 128 : faceCount * 128, storage)
       const unusedPixelGradient = allocate('Unused pixel derivative', 4, storage)

@@ -116,11 +116,16 @@ async function run() {
   check(!restarted.done,'new version restarts optimization')
   const warm = await read(state.lens.heightBuffer,optimized.length)
   check(warm.every((v,i)=>Math.abs(v-optimized[i])<config.optimizer.learningRate*1.1),'new target warm-starts from current lens')
+  // A running batch displays the forward pass its last step already evaluated,
+  // i.e. the heights before that update, instead of tracing the scene again.
   const previous = await measure(restarted.result)
+  const before = device.createBuffer({ size: optimized.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
+  device.queue.writeBuffer(before, 0, optimized)
   e = device.createCommandEncoder()
-  const repeated = forward.encode(e,state)
+  const repeated = forward.encode(e,{ ...state, lens: { ...state.lens, heightBuffer: before } })
   device.queue.submit([e.finish()])
-  check(Math.abs((await measure(repeated))-previous)<1e-4,'final preview corresponds to updated heights')
+  check(Math.abs((await measure(repeated))-previous)<1e-6,'running preview reuses the step forward of the pre-update heights')
+  before.destroy()
   await device.queue.onSubmittedWorkDone()
   check(errors.length===0,`no GPU validation errors: ${errors.join('; ')}`)
   say('ALL PASSED')

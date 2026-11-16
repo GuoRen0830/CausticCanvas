@@ -154,6 +154,11 @@ export interface OptimizationStepResult {
   // Stop scheduling this target after submitting the current batch.
   // A CPU-known decision, not a GPU-completion or readback signal.
   readonly done: boolean
+
+  // Optional forward evaluation the step already encoded, of the heights
+  // before its update. A caller may display it instead of encoding another
+  // forward pass; it lags the returned heights by one step.
+  readonly preview?: ForwardResult
 }
 
 export interface LensOptimizer {

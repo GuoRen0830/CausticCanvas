@@ -22,6 +22,18 @@ struct Params {
   invFaceCount: f32,
   maxIterations: u32,
   lossBlurSigma: f32,
+  // Fraction of maxIterations over which lossBlurSigma anneals to zero.
+  lossBlurAnnealFraction: f32,
+  // Final Adam step size as a fraction of learningRate.
+  learningRateFloor: f32,
+  // Length that makes the Laplacian dimensionless (defaults to mean spacing).
+  curvatureScale: f32,
+  // Gaussian width in meters for the optical gradient blur.
+  gradientSigma: f32,
+  // Final loss-filter width in pixels.
+  lossBlurFinalSigma: f32,
+  // Gaussian width in meters for the Adam update blur (0 = unsmoothed update).
+  updateSigma: f32,
 }
 
 struct StepState {
@@ -105,8 +117,9 @@ fn lossFromTexture(
 
 // Symmetric, zero-padded Gaussian filtering: d||K(E-T)||²/dE = 2 K^T K(E-T).
 fn filtered(index: u32, axis: u32, source: u32) -> f32 {
-  let progress = f32(state.step) / max(1.0, 0.8 * f32(params.maxIterations));
-  let sigma = params.lossBlurSigma * max(0.0, 1.0 - progress);
+  let progress = f32(state.step) / max(1.0, params.lossBlurAnnealFraction * f32(params.maxIterations));
+  let sigma = params.lossBlurFinalSigma +
+    (params.lossBlurSigma - params.lossBlurFinalSigma) * max(0.0, 1.0 - progress);
   let radius = i32(ceil(3.0 * sigma));
   let pixel = vec2<i32>(i32(index % params.imageSize.x), i32(index / params.imageSize.x));
   var sum = 0.0;
@@ -164,7 +177,57 @@ fn vertexIndex(column: u32, row: u32) -> u32 {
   return row * params.gridSize.x + column;
 }
 
-// Dimensionless curvature: discrete Laplacian times the mean spacing.
+fn finiteGradient(value: f32) -> f32 {
+  return select(0.0, value, abs(value) < 3.0e38);
+}
+
+// Separable Gaussian blur of the optical gradient with width gradientSigma
+// meters, renormalized at the lens boundary (no flux leaves the aperture).
+// Runs before computeCurvature, so the curvature buffer is free scratch.
+fn smoothedGradient(vertex: u32, axis: u32, source: u32) -> f32 {
+  return gaussianAlong(vertex, axis, source, params.gradientSigma);
+}
+
+fn gaussianAlong(vertex: u32, axis: u32, source: u32, width: f32) -> f32 {
+  let coordinate = vec2<i32>(i32(vertex % params.gridSize.x), i32(vertex / params.gridSize.x));
+  let sigma = width / params.spacing[axis];
+  let radius = i32(ceil(3.0 * sigma));
+  let size = vec2<i32>(params.gridSize);
+  var sum = 0.0;
+  var weightSum = 0.0;
+  for (var offset = -radius; offset <= radius; offset++) {
+    var q = coordinate;
+    q[axis] += offset;
+    if (q[axis] < 0 || q[axis] >= size[axis]) { continue; }
+    let weight = exp(-0.5 * f32(offset * offset) / max(sigma * sigma, 1e-8));
+    let i = u32(q.y) * params.gridSize.x + u32(q.x);
+    var value = 0.0;
+    if (source == 0u) { value = heightGradient[i]; } else { value = curvature[i]; }
+    sum += weight * finiteGradient(value);
+    weightSum += weight;
+  }
+  return sum / weightSum;
+}
+
+@compute @workgroup_size(64)
+fn smoothGradientX(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = id.x + id.y * groups.x * 64u;
+  if (vertex >= params.gridSize.x * params.gridSize.y) {
+    return;
+  }
+  curvature[vertex] = finiteGradient(smoothedGradient(vertex, 0u, 0u));
+}
+
+@compute @workgroup_size(64)
+fn smoothGradientY(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = id.x + id.y * groups.x * 64u;
+  if (vertex >= params.gridSize.x * params.gridSize.y) {
+    return;
+  }
+  heightGradient[vertex] = finiteGradient(smoothedGradient(vertex, 1u, 1u));
+}
+
+// Dimensionless curvature: discrete Laplacian times curvatureScale.
 // Boundary vertices have no curvature term.
 @compute @workgroup_size(64)
 fn computeCurvature(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
@@ -188,7 +251,7 @@ fn computeCurvature(@builtin(global_invocation_id) id: vec3u, @builtin(num_workg
   let laplacian =
     (heights[vertex - 1u] + heights[vertex + 1u] - 2.0 * h) / dx2 +
     (heights[vertex - params.gridSize.x] + heights[vertex + params.gridSize.x] - 2.0 * h) / dy2;
-  curvature[vertex] = laplacian * 0.5 * (params.spacing.x + params.spacing.y);
+  curvature[vertex] = laplacian * params.curvatureScale;
 }
 
 // dL/d(gx, gy) of the slope penalty for one face.
@@ -256,9 +319,8 @@ fn addRegularization(@builtin(global_invocation_id) id: vec3u, @builtin(num_work
   if (column + 1u < columns) { curvatureSum += curvature[vertex + 1u] / dx2; }
   if (row > 0u) { curvatureSum += curvature[vertex - columns] / dy2; }
   if (row + 1u < rows) { curvatureSum += curvature[vertex + columns] / dy2; }
-  let meanSpacing = 0.5 * (params.spacing.x + params.spacing.y);
   var gradient = 2.0 * params.smoothnessWeight * params.invVertexCount *
-    meanSpacing * curvatureSum;
+    params.curvatureScale * curvatureSum;
 
   // Slope limit: gather from the up to four cells sharing this vertex.
   for (var dy = 0u; dy < 2u; dy++) {
@@ -279,12 +341,7 @@ fn addRegularization(@builtin(global_invocation_id) id: vec3u, @builtin(num_work
   heightGradient[vertex] = finiteOptical + gradient;
 }
 
-@compute @workgroup_size(64)
-fn adamUpdate(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
-  let vertex = id.x + id.y * groups.x * 64u;
-  if (vertex >= params.gridSize.x * params.gridSize.y) {
-    return;
-  }
+fn adamDelta(vertex: u32) -> f32 {
   let t = f32(state.step + 1u);
   let g = heightGradient[vertex];
   let previous = moments[vertex];
@@ -294,9 +351,50 @@ fn adamUpdate(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups)
   let mHat = m / (1.0 - pow(params.beta1, t));
   let vHat = v / (1.0 - pow(params.beta2, t));
   let remaining = max(0.0, 1.0 - t / f32(params.maxIterations));
-  let rate = params.learningRate * (0.05 + 0.95 * remaining * remaining);
-  let updated = heights[vertex] - rate * mHat / (sqrt(vHat) + params.epsilon);
-  heights[vertex] = max(updated, params.minHeight);
+  let rateFloor = params.learningRateFloor;
+  let rate = params.learningRate * (rateFloor + (1.0 - rateFloor) * remaining * remaining);
+  return rate * mHat / (sqrt(vHat) + params.epsilon);
+}
+
+@compute @workgroup_size(64)
+fn adamUpdate(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = id.x + id.y * groups.x * 64u;
+  if (vertex >= params.gridSize.x * params.gridSize.y) {
+    return;
+  }
+  heights[vertex] = max(heights[vertex] - adamDelta(vertex), params.minHeight);
+}
+
+// Smoothed-update variant: Adam's per-vertex normalization can turn a smooth
+// gradient back into vertex-scale ripples, so blur the step itself instead.
+// The curvature buffer is free after addRegularization and heightGradient is
+// free after adamStep, so they hold the step between the three passes.
+@compute @workgroup_size(64)
+fn adamStep(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = id.x + id.y * groups.x * 64u;
+  if (vertex >= params.gridSize.x * params.gridSize.y) {
+    return;
+  }
+  curvature[vertex] = finiteGradient(adamDelta(vertex));
+}
+
+@compute @workgroup_size(64)
+fn smoothUpdateX(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = id.x + id.y * groups.x * 64u;
+  if (vertex >= params.gridSize.x * params.gridSize.y) {
+    return;
+  }
+  heightGradient[vertex] = gaussianAlong(vertex, 0u, 1u, params.updateSigma);
+}
+
+@compute @workgroup_size(64)
+fn applySmoothUpdateY(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = id.x + id.y * groups.x * 64u;
+  if (vertex >= params.gridSize.x * params.gridSize.y) {
+    return;
+  }
+  let step = gaussianAlong(vertex, 1u, 0u, params.updateSigma);
+  heights[vertex] = max(heights[vertex] - step, params.minHeight);
 }
 
 // Runs after adamUpdate so every vertex sees the same step count.

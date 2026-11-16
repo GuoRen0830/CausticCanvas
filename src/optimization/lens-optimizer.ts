@@ -16,7 +16,7 @@ export type OptimizerSettings = { [K in keyof typeof config.optimizer]: number }
 
 const LOSS_WORKGROUP = 256
 const VERTEX_WORKGROUP = 64
-const PARAMS_SIZE = 80
+const PARAMS_SIZE = 112
 
 // Total transmitted power P = incidentIrradiance * aperture area.
 export function incidentPower(input: ForwardInput): number {
@@ -62,10 +62,14 @@ function validateSettings(settings: OptimizerSettings) {
     settings.maxSurfaceSlope,
     settings.minHeight,
   ]
-  const nonnegative = [settings.smoothnessWeight, settings.slopeWeight, settings.lossBlurSigma]
+  const nonnegative = [settings.smoothnessWeight, settings.slopeWeight, settings.lossBlurSigma,
+    settings.curvatureLengthScale, settings.gradientSmoothingSigma, settings.lossBlurFinalSigma,
+    settings.updateSmoothingSigma]
+  const fractions = [settings.lossBlurAnnealFraction, settings.learningRateFloor]
   if (
     positive.some((value) => !Number.isFinite(value) || value <= 0) ||
     nonnegative.some((value) => !Number.isFinite(value) || value < 0) ||
+    fractions.some((value) => !(value > 0 && value <= 1)) ||
     !(settings.beta1 >= 0 && settings.beta1 < 1) ||
     !(settings.beta2 >= 0 && settings.beta2 < 1) ||
     !Number.isSafeInteger(settings.maxIterations) || settings.maxIterations < 1 ||
@@ -120,6 +124,13 @@ function writeParams(
   floats.forEach((value, i) => view.setFloat32(24 + 4 * i, value, true))
   view.setUint32(72, settings.maxIterations, true)
   view.setFloat32(76, settings.lossBlurSigma, true)
+  view.setFloat32(80, settings.lossBlurAnnealFraction, true)
+  view.setFloat32(84, settings.learningRateFloor, true)
+  const meanSpacing = 0.5 * (lens.sizeX / (lens.columns - 1) + lens.sizeY / (lens.rows - 1))
+  view.setFloat32(88, settings.curvatureLengthScale || meanSpacing, true)
+  view.setFloat32(92, settings.gradientSmoothingSigma, true)
+  view.setFloat32(96, settings.lossBlurFinalSigma, true)
+  view.setFloat32(100, settings.updateSmoothingSigma, true)
   return data
 }
 
@@ -131,6 +142,7 @@ export async function createLensOptimizer(
   initial: ForwardInput,
   forward: ForwardModel,
   settings: OptimizerSettings = config.optimizer,
+  options: { timestamps?: (stage: string) => GPUComputePassTimestampWrites | undefined } = {},
 ): Promise<LensOptimizer | null> {
   if (!forward.encodeBackward) {
     // Without optical gradients there is no honest update; stay in preview mode.
@@ -243,9 +255,14 @@ export async function createLensOptimizer(
       filterResidualY,
       filterGradientY,
       filterGradientX,
+      smoothGradientX,
+      smoothGradientY,
       computeCurvature,
       addRegularization,
       adamUpdate,
+      adamStep,
+      smoothUpdateX,
+      applySmoothUpdateY,
       advanceStep,
     ] = await Promise.all([
       pipeline('lossFromBuffer', [lossLayout, causticLayouts.buffer]),
@@ -254,9 +271,14 @@ export async function createLensOptimizer(
       pipeline('filterResidualY', [lossLayout]),
       pipeline('filterGradientY', [lossLayout]),
       pipeline('filterGradientX', [lossLayout]),
+      pipeline('smoothGradientX', [updateLayout]),
+      pipeline('smoothGradientY', [updateLayout]),
       pipeline('computeCurvature', [updateLayout]),
       pipeline('addRegularization', [updateLayout]),
       pipeline('adamUpdate', [updateLayout]),
+      pipeline('adamStep', [updateLayout]),
+      pipeline('smoothUpdateX', [updateLayout]),
+      pipeline('applySmoothUpdateY', [updateLayout]),
       pipeline('advanceStep', [updateLayout]),
     ])
 
@@ -339,8 +361,14 @@ export async function createLensOptimizer(
       })
     }
 
-    const optimizer: LensOptimizer & { readonly lossHistory: typeof lossHistory } = {
+    const optimizer: LensOptimizer & {
+      readonly lossHistory: typeof lossHistory
+      // Read-only diagnostics for check pages: the last combined height
+      // gradient and the Adam moments (m, v) per vertex.
+      readonly diagnostics: { heightGradient: GPUBuffer, moments: GPUBuffer }
+    } = {
       lossHistory,
+      diagnostics: { heightGradient, moments },
 
       setTarget(target) {
         if (destroyed) return
@@ -389,14 +417,14 @@ export async function createLensOptimizer(
           throw new Error('Forward image size does not match the receiver.')
         }
 
-        const lossPass = encoder.beginComputePass({ label: 'Optimizer loss' })
+        const lossPass = encoder.beginComputePass({ label: 'Optimizer loss', timestampWrites: options.timestamps?.('loss') })
         lossPass.setPipeline(result.caustic.kind === 'buffer' ? lossFromBuffer : lossFromTexture)
         lossPass.setBindGroup(0, lossBindings)
         lossPass.setBindGroup(1, causticBindingsFor(result.caustic))
         lossPass.dispatchWorkgroups(...lossGrid)
         lossPass.end()
 
-        const filterPass = encoder.beginComputePass({ label: 'Optimizer loss filter' })
+        const filterPass = encoder.beginComputePass({ label: 'Optimizer loss filter', timestampWrites: options.timestamps?.('filter') })
         filterPass.setBindGroup(0, lossBindings)
         for (const filter of [filterResidualX, filterResidualY, filterGradientY, filterGradientX]) {
           filterPass.setPipeline(filter)
@@ -407,14 +435,27 @@ export async function createLensOptimizer(
         // Optical vector-Jacobian product overwrites heightGradient.
         forward.encodeBackward!(encoder, stepInput, result, pixelGradient, heightGradient)
 
-        const updatePass = encoder.beginComputePass({ label: 'Optimizer update' })
+        const updatePass = encoder.beginComputePass({ label: 'Optimizer update', timestampWrites: options.timestamps?.('update') })
         updatePass.setBindGroup(0, updateBindings)
+        if (settings.gradientSmoothingSigma > 0) {
+          updatePass.setPipeline(smoothGradientX)
+          updatePass.dispatchWorkgroups(...vertexGrid)
+          updatePass.setPipeline(smoothGradientY)
+          updatePass.dispatchWorkgroups(...vertexGrid)
+        }
         updatePass.setPipeline(computeCurvature)
         updatePass.dispatchWorkgroups(...vertexGrid)
         updatePass.setPipeline(addRegularization)
         updatePass.dispatchWorkgroups(...vertexGrid)
-        updatePass.setPipeline(adamUpdate)
-        updatePass.dispatchWorkgroups(...vertexGrid)
+        if (settings.updateSmoothingSigma > 0) {
+          for (const stage of [adamStep, smoothUpdateX, applySmoothUpdateY]) {
+            updatePass.setPipeline(stage)
+            updatePass.dispatchWorkgroups(...vertexGrid)
+          }
+        } else {
+          updatePass.setPipeline(adamUpdate)
+          updatePass.dispatchWorkgroups(...vertexGrid)
+        }
         updatePass.setPipeline(advanceStep)
         updatePass.dispatchWorkgroups(1)
         updatePass.end()
@@ -432,7 +473,7 @@ export async function createLensOptimizer(
         }
 
         done = iteration >= settings.maxIterations
-        return { lens, done }
+        return { lens, done, preview: result }
       },
 
       destroy() {

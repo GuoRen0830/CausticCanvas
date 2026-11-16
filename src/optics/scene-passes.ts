@@ -9,6 +9,7 @@ export async function createScenePasses(
   device: GPUDevice, view: DesignView, faceCount: number, faceGrid: [number, number], vertexGrid: [number, number],
   beams: GPUBuffer, image: GPUBuffer, triangleGradients: GPUBuffer,
   allocate: (label: string, size: number, usage: GPUBufferUsageFlags) => GPUBuffer,
+  timestamps?: (stage: string) => GPUComputePassTimestampWrites | undefined,
 ) {
   const module = device.createShaderModule({ label: 'Differentiable scene receiver',
     code: [opticsShader, bvhShader, sceneShader].join('\n') })
@@ -28,11 +29,20 @@ export async function createScenePasses(
   const pixels = upload('Light-view visible surfaces', view.samples)
   const hits = allocate('Solver first hits', faceCount * 8, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC)
   const firstHits = { mesh: view.mesh, buffer: hits, triangles }
+  // Each step binds the same buffers, so keep the last bind group per pipeline
+  // instead of creating four new ones per training step.
+  const cached = new Map<GPUComputePipeline, { buffers: GPUBuffer[], group: GPUBindGroup }>()
   function run(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, grid: [number, number],
     bindings: [number, GPUBuffer][]) {
-    const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0),
-      entries: bindings.map(([binding, buffer]) => ({ binding, resource: { buffer } })) })
-    const pass = encoder.beginComputePass({ label: pipeline.label })
+    const buffers = bindings.map(([, buffer]) => buffer)
+    let entry = cached.get(pipeline)
+    if (!entry || entry.buffers.some((buffer, i) => buffer !== buffers[i])) {
+      entry = { buffers, group: device.createBindGroup({ layout: pipeline.getBindGroupLayout(0),
+        entries: bindings.map(([binding, buffer]) => ({ binding, resource: { buffer } })) }) }
+      cached.set(pipeline, entry)
+    }
+    const group = entry.group
+    const pass = encoder.beginComputePass({ label: pipeline.label, timestampWrites: timestamps?.(pipeline.label) })
     pass.setPipeline(pipeline)
     pass.setBindGroup(0, group)
     pass.dispatchWorkgroups(...grid)

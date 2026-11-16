@@ -30,18 +30,22 @@ export function createSimulation(
       const optics = { ...state.optics }
       const receiver = { ...state.receiver }
       let done = false
+      let preview: ForwardResult | undefined
 
       if (optimizer) {
         for (let step = 0; step < steps; step++) {
           const update = optimizer.encodeStep(encoder, { lens, optics, receiver })
           lens = update.lens
           done = update.done
+          preview = update.preview
           if (done) break
         }
       }
 
-      // Render the final heights, including the update that ends a run.
-      const result = forward.encode(encoder, { lens, optics, receiver })
+      // While a run continues, show the forward pass the last step already
+      // evaluated (one update behind) instead of tracing the scene again. A
+      // run's final update, and frames without steps, get a fresh evaluation.
+      const result = !done && preview ? preview : forward.encode(encoder, { lens, optics, receiver })
 
       // Publish the current buffer handle only after encoding succeeds.
       state.lens = lens
