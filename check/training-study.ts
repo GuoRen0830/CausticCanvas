@@ -7,15 +7,17 @@ import { lensShapeMetrics } from '../src/optimization/lens-metrics'
 import { buildSceneGeometry } from '../src/rendering/scene-mesh'
 import { createSimulation } from '../src/simulation'
 import type { ForwardResult } from '../src/contracts'
-import { defaultScene, readBundledScene } from '../src/geometry/bundled-scenes'
+import { bundledScenes, defaultScene, readBundledScene, type BundledScene } from '../src/geometry/bundled-scenes'
 import { placeObjOnReceiver } from '../src/geometry/place-obj'
-import { strokeFractions, strokeWeights } from './stroke-case'
+import { faceMetrics, faceWeights, strokeFractions, strokeWeights } from './stroke-case'
 
 // /check/training-study.html?smoothnessWeight=30&maxIterations=1500&every=250
 // Any config.optimizer key can be overridden from the query string. Extra keys:
 //   grid    lens vertices per side (default 33)
 //   every   checkpoint interval in iterations (default 250)
 //   timing  GPU timestamp steps to average per pass (default 20; 0 disables)
+//   scene   bundled scene id (default: the app's default scene)
+//   target  face for the face case (default: the horizontal stroke)
 // Reports image quality (stroke fractions), lens shape metrics and timing as JSON.
 const lines: string[] = []
 function log(value: unknown) {
@@ -52,16 +54,27 @@ async function run() {
     return { querySet, beginningOfPassWriteIndex: index, endOfPassWriteIndex: index + 1 }
   }
 
-  const { mesh } = await readBundledScene(defaultScene)
+  const sceneId = (query.get('scene') ?? defaultScene) as BundledScene
+  if (!(sceneId in bundledScenes)) throw new Error('Unknown scene ' + sceneId)
+  const { mesh } = await readBundledScene(sceneId)
   const { receiver } = placeObjOnReceiver(mesh, config.lens, config.receiver)
   const lensSpec = { ...config.lens, columns: grid, rows: grid, sizeX: receiver.sizeX, sizeY: receiver.sizeY }
   const lens = createFlatLens(device, lensSpec)
   const state = { lens, receiver, optics: config.optics, target: null }
   const view = buildDesignView(buildSceneGeometry(receiver, { mesh }).mesh, receiver)
   const solver = (await createForwardModel(device, state, { designView: view, timestamps }))!
-  const optimizer = (await createLensOptimizer(device, state, solver, settings, { timestamps }))!
+  // Coarse-to-fine runs need a forward model on the coarse grid as well.
+  // The default coarse grid only applies where it properly divides this grid.
+  if ((grid - 1) % settings.coarseGridCells !== 0 || grid - 1 <= settings.coarseGridCells) settings.coarseGridCells = 0
+  const coarseCells = settings.coarseGridCells
+  const coarseLens = coarseCells > 0
+    ? createFlatLens(device, { ...lensSpec, columns: coarseCells + 1, rows: coarseCells + 1 }) : null
+  const coarseForward = coarseLens
+    ? (await createForwardModel(device, { ...state, lens: coarseLens }, { designView: view }))! : undefined
+  const optimizer = (await createLensOptimizer(device, state, solver, settings, { timestamps, coarseForward }))!
   const sim = createSimulation(state, solver, optimizer)
-  const weights = strokeWeights(receiver)
+  const face = query.get('target') === 'face'
+  const weights = face ? faceWeights(receiver) : strokeWeights(receiver)
   const pixels = receiver.width * receiver.height, vertices = grid * grid
   const staging = device.createBuffer({ size: Math.max(pixels, 2 * vertices) * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST })
   async function read(source: GPUBuffer, count: number) {
@@ -74,7 +87,11 @@ async function run() {
     return values
   }
 
-  log({ settings, grid, vertices, faces: 2 * (grid - 1) ** 2, timestampQuery: canTime, adapter: adapter.info?.description || adapter.info?.vendor })
+  // encodeStep calls until done: coarse calls (several coarse steps each) plus fine steps.
+  const totalCalls = coarseCells > 0
+    ? settings.refineIterations + Math.ceil(settings.coarseIterations / settings.coarseStepsPerCall)
+    : settings.maxIterations
+  log({ settings, grid, totalCalls, vertices, faces: 2 * (grid - 1) ** 2, timestampQuery: canTime, adapter: adapter.info?.description || adapter.info?.vendor })
   optimizer.setTarget({ version: 1, width: receiver.width, height: receiver.height, values: weights })
 
   // Per-pass GPU time, averaged over the first steps (widest loss filter).
@@ -83,7 +100,7 @@ async function run() {
   let result: ForwardResult | null = null
   let iteration = 0
   if (canTime) {
-    for (; timed < timingSteps && iteration < settings.maxIterations; timed++, iteration++) {
+    for (; timed < timingSteps && iteration < totalCalls; timed++, iteration++) {
       stages = []
       recording = true
       const enc = device.createCommandEncoder()
@@ -110,10 +127,11 @@ async function run() {
 
   const checkpoints = []
   let lastHeights = new Float32Array(0)
+  let lastImage = new Float32Array(0)
   let trainingMs = 0
   const batch = 10
-  while (iteration < settings.maxIterations) {
-    const target = Math.min(settings.maxIterations, (Math.floor(iteration / every) + 1) * every)
+  while (iteration < totalCalls) {
+    const target = Math.min(totalCalls, (Math.floor(iteration / every) + 1) * every)
     const start = performance.now()
     while (iteration < target) {
       const steps = Math.min(batch, target - iteration)
@@ -128,6 +146,7 @@ async function run() {
     const image = await read(result!.caustic.buffer, pixels)
     const heights = await read(state.lens.heightBuffer, vertices)
     const fractions = strokeFractions(image, weights, view)
+    const faceStats = face ? faceMetrics(image, weights, view, receiver) : null
     const shape = lensShapeMetrics(heights, lensSpec, settings.maxSurfaceSlope)
     // Adam scale check: when sqrt(v) approaches epsilon, epsilon shrinks the step.
     const { heightGradient, moments } = (optimizer as any).diagnostics
@@ -138,6 +157,7 @@ async function run() {
       iteration,
       modelPct: +(100 * fractions.modelFraction).toFixed(2),
       scenePct: +(100 * fractions.sceneFraction).toFixed(2),
+      ...(faceStats ? { eyeRecall: +faceStats.eyeRecall.toFixed(3), haze: +faceStats.haze.toFixed(4) } : {}),
       modelW: +fractions.model.toFixed(5),
       totalW: +fractions.total.toFixed(5),
       lapRms: +shape.laplacianRms.toFixed(3),
@@ -152,14 +172,63 @@ async function run() {
     }
     checkpoints.push(point)
     lastHeights = heights
+    lastImage = image
     log(point)
   }
   const final = checkpoints[checkpoints.length - 1]
-  const summary = { final, errors }
-  ;(window as any).studyResult = { settings, grid, checkpoints, ...summary, heights: Array.from(lastHeights) }
+  const summary = { final, spill: spillBands(lastImage, weights, view.surfaceAreas, receiver), errors }
+  ;(window as any).studyResult = { settings, grid, checkpoints, ...summary, heights: Array.from(lastHeights),
+    image: Array.from(lastImage), dump: relativeDump(lastImage, weights, view.surfaceAreas, receiver) }
   log(summary)
   staging.destroy(); resolve.destroy(); readTimes.destroy(); querySet?.destroy()
-  optimizer.destroy(); solver.destroy(); lens.heightBuffer.destroy(); device.destroy()
+  optimizer.destroy(); solver.destroy(); lens.heightBuffer.destroy()
+  coarseForward?.destroy(); coarseLens?.heightBuffer.destroy(); device.destroy()
   log('STUDY DONE')
 }
 run().catch(error => { log('Error: ' + String(error)); console.error(error) })
+
+// Share of the received power (%) by distance in pixels from the brush
+// (weight >= 0.5): where the light that misses the drawing goes.
+function spillBands(image: Float32Array, weights: Float32Array, areas: Float32Array, { width, height }: { width: number, height: number }) {
+  const distance = new Float32Array(width * height).fill(Infinity)
+  const queue: number[] = []
+  for (let i = 0; i < distance.length; i++) if (weights[i] >= 0.5) { distance[i] = 0; queue.push(i) }
+  // Breadth-first chamfer distance (4-neighbour steps of 1 px).
+  for (let head = 0; head < queue.length; head++) {
+    const i = queue[head], x = i % width, y = (i - x) / width
+    for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+      const j = ny * width + nx
+      if (distance[j] > distance[i] + 1) { distance[j] = distance[i] + 1; queue.push(j) }
+    }
+  }
+  const edges = [0, 2, 4, 8, Infinity], bands = [0, 0, 0, 0, 0]
+  let total = 0
+  for (let i = 0; i < image.length; i++) {
+    const power = image[i] * areas[i]
+    total += power
+    bands[edges.findIndex(edge => distance[i] <= edge)] += power
+  }
+  const pct = (value: number) => +(100 * value / Math.max(total, 1e-30)).toFixed(2)
+  return { inside: pct(bands[0]), to2px: pct(bands[1]), to4px: pct(bands[2]), to8px: pct(bands[3]), beyond8px: pct(bands[4]) }
+}
+
+// Half-resolution map of irradiance relative to the mean inside the brush,
+// one hex digit per pixel on a log scale: 0 below 1e-4, f at 1 or above.
+function relativeDump(image: Float32Array, weights: Float32Array, areas: Float32Array, { width, height }: { width: number, height: number }) {
+  let inside = 0, insideArea = 0
+  for (let i = 0; i < image.length; i++) if (weights[i] >= 0.5) { inside += image[i] * areas[i]; insideArea += areas[i] }
+  const reference = inside / Math.max(insideArea, 1e-30)
+  const rows: string[] = []
+  for (let y = 0; y + 1 < height; y += 2) {
+    let row = ''
+    for (let x = 0; x + 1 < width; x += 2) {
+      const i = y * width + x
+      const mean = 0.25 * (image[i] + image[i + 1] + image[i + width] + image[i + width + 1])
+      const level = Math.round(15 * (1 + Math.log10(Math.max(mean / reference, 1e-5)) / 4))
+      row += Math.max(0, Math.min(15, level)).toString(16)
+    }
+    rows.push(row)
+  }
+  return rows
+}

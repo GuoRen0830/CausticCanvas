@@ -145,6 +145,7 @@ export async function createForwardModel(
 
     return {
       targetSurfaceAreas: options.designView?.surfaceAreas,
+      targetDepths: options.designView && designDepths(options.designView),
       encode(encoder, input) {
         if (disposed) throw new Error('Forward model has been destroyed.')
         validate(input)
@@ -220,4 +221,12 @@ export async function createForwardModel(
     for (const buffer of buffers) buffer.destroy()
     throw error
   }
+}
+
+// z of the first surface hit per design pixel (0 where nothing is hit).
+function designDepths(view: DesignView): Float32Array {
+  const values = new Float32Array(view.samples.buffer)
+  const depths = new Float32Array(view.width * view.height)
+  for (let i = 0; i < depths.length; i++) if (view.samples[2 * i]) depths[i] = values[2 * i + 1]
+  return depths
 }

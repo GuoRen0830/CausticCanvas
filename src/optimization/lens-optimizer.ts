@@ -11,6 +11,8 @@ import type {
   TargetImage,
 } from '../contracts'
 import shaderSource from './shaders/optimizer.wgsl?raw'
+import { transportHeights } from './transport-init'
+import multigridSource from './shaders/multigrid.wgsl?raw'
 
 export type OptimizerSettings = { [K in keyof typeof config.optimizer]: number }
 
@@ -73,7 +75,14 @@ function validateSettings(settings: OptimizerSettings) {
     !(settings.beta1 >= 0 && settings.beta1 < 1) ||
     !(settings.beta2 >= 0 && settings.beta2 < 1) ||
     !Number.isSafeInteger(settings.maxIterations) || settings.maxIterations < 1 ||
-    !Number.isSafeInteger(settings.lossLogInterval) || settings.lossLogInterval < 0
+    !Number.isSafeInteger(settings.lossLogInterval) || settings.lossLogInterval < 0 ||
+    !Number.isSafeInteger(settings.coarseGridCells) || settings.coarseGridCells < 0 ||
+    !Number.isSafeInteger(settings.coarseIterations) || settings.coarseIterations < 1 ||
+    !Number.isSafeInteger(settings.coarseStepsPerCall) || settings.coarseStepsPerCall < 1 ||
+    !Number.isSafeInteger(settings.refineIterations) || settings.refineIterations < 1 ||
+    !Number.isSafeInteger(settings.transportIterations) || settings.transportIterations < 1 ||
+    !(settings.coarseLearningRate > 0) || !(settings.refineLearningRate > 0) ||
+    !(settings.refineLossBlurSigma >= 0)
   ) {
     throw new Error('Invalid optimizer settings.')
   }
@@ -142,7 +151,12 @@ export async function createLensOptimizer(
   initial: ForwardInput,
   forward: ForwardModel,
   settings: OptimizerSettings = config.optimizer,
-  options: { timestamps?: (stage: string) => GPUComputePassTimestampWrites | undefined } = {},
+  options: {
+    timestamps?: (stage: string) => GPUComputePassTimestampWrites | undefined
+    // Forward model on a coarse grid with coarseGridCells cells per side. When
+    // given, each run first optimizes that grid and then refines the fine one.
+    coarseForward?: ForwardModel
+  } = {},
 ): Promise<LensOptimizer | null> {
   if (!forward.encodeBackward) {
     // Without optical gradients there is no honest update; stay in preview mode.
@@ -195,7 +209,14 @@ export async function createLensOptimizer(
       GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
     )
 
-    device.queue.writeBuffer(params, 0, writeParams(initial, settings))
+    // After a coarse run the fine refinement starts close to the answer, so it
+    // begins from a narrower loss filter.
+    const refining = settings.coarseGridCells > 0 && !!options.coarseForward
+    const fineSettings = refining
+      ? { ...settings, lossBlurSigma: settings.refineLossBlurSigma,
+          learningRate: settings.refineLearningRate, maxIterations: settings.refineIterations }
+      : settings
+    device.queue.writeBuffer(params, 0, writeParams(initial, fineSettings))
 
     const visibility = GPUShaderStage.COMPUTE
     const storageEntry = (binding: number, type: GPUBufferBindingType) => ({
@@ -326,6 +347,72 @@ export async function createLensOptimizer(
       return group
     }
 
+    // Coarse-to-fine: a nested optimizer trains a coarse copy of the lens, whose
+    // heights are interpolated onto the fine grid before the fine refinement.
+    const coarseCells = settings.coarseGridCells
+    let coarse: {
+      optimizer: LensOptimizer
+      heights: GPUBuffer
+      lens: LensState
+      transfer: GPUBindGroup
+      restrict: GPUComputePipeline
+      prolong: GPUComputePipeline
+      coarseGrid: [number, number]
+      // Transport-initialized coarse heights for the next reset, if any.
+      initial: GPUBuffer
+      initialPending: boolean
+      meta: { columns: number, rows: number, sizeX: number, sizeY: number }
+    } | null = null
+    if (coarseCells > 0 && options.coarseForward) {
+      const fineCells = [lensMeta.columns - 1, lensMeta.rows - 1]
+      if (fineCells.some(cells => cells % coarseCells !== 0 || cells === coarseCells)) {
+        throw new Error('coarseGridCells must be a proper divisor of the fine cell count.')
+      }
+      const coarseMeta = { ...lensMeta, columns: coarseCells + 1, rows: coarseCells + 1 }
+      const coarseCount = coarseMeta.columns * coarseMeta.rows
+      const coarseHeights = createBuffer('Coarse lens heights', coarseCount * 4, storage)
+      const coarseLens: LensState = { ...coarseMeta, heightBuffer: coarseHeights }
+      const inner = await createLensOptimizer(device,
+        { lens: coarseLens, optics: initial.optics, receiver }, options.coarseForward,
+        { ...settings, coarseGridCells: 0, maxIterations: settings.coarseIterations,
+          learningRate: settings.coarseLearningRate, lossLogInterval: 0 })
+      if (!inner) throw new Error('Coarse optimizer could not be created.')
+      const transferParams = createBuffer('Multigrid transfer', 32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST)
+      device.queue.writeBuffer(transferParams, 0, new Uint32Array([
+        lensMeta.columns, lensMeta.rows, coarseMeta.columns, coarseMeta.rows,
+        fineCells[0] / coarseCells, fineCells[1] / coarseCells, 0, 0]))
+      const transferModule = device.createShaderModule({ label: 'Multigrid transfer', code: multigridSource })
+      // Both entry points use the same three bindings, so one group serves both.
+      const transferLayout = device.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      ] })
+      const layout = device.createPipelineLayout({ bindGroupLayouts: [transferLayout] })
+      const [restrictPipeline, prolongPipeline] = await Promise.all(
+        ['restrictHeights', 'prolongHeights'].map(entryPoint =>
+          device.createComputePipelineAsync({ label: entryPoint, layout,
+            compute: { module: transferModule, entryPoint } })))
+      coarse = {
+        optimizer: inner,
+        heights: coarseHeights,
+        lens: coarseLens,
+        transfer: device.createBindGroup({ layout: transferLayout, entries: [
+          { binding: 0, resource: { buffer: transferParams } },
+          { binding: 1, resource: { buffer: heights } },
+          { binding: 2, resource: { buffer: coarseHeights } },
+        ] }),
+        restrict: restrictPipeline,
+        prolong: prolongPipeline,
+        coarseGrid: workgroupGrid(Math.ceil(coarseCount / 64), limit),
+        initial: createBuffer('Coarse transport heights', coarseCount * 4,
+          GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST),
+        initialPending: false,
+        meta: coarseMeta,
+      }
+    }
+    let coarsePhase = false
+
     let targetVersion: number | null = null
     let active = false
     let done = true
@@ -388,9 +475,29 @@ export async function createLensOptimizer(
         done = !active
         if (!normalized) return
         device.queue.writeBuffer(targetBuffer, 0, normalized)
+        if (coarse && settings.transportInit > 0) {
+          // Power per light-view pixel, then a global lens-to-target assignment.
+          const pixelArea = (receiver.sizeX / receiver.width) * (receiver.sizeY / receiver.height)
+          const areas = forward.targetSurfaceAreas
+          const power = normalized.map((value, i) => value * (areas?.[i] ?? pixelArea))
+          const start = transportHeights({
+            target: power, width: receiver.width, height: receiver.height,
+            receiverSizeX: receiver.sizeX, receiverSizeY: receiver.sizeY, receiverZ: receiver.z,
+            depths: forward.targetDepths,
+            columns: coarse.meta.columns, rows: coarse.meta.rows,
+            lensSizeX: coarse.meta.sizeX, lensSizeY: coarse.meta.sizeY,
+            baseHeight: Math.max(settings.minHeight, config.lens.thickness),
+            eta: initial.optics.lensIOR / initial.optics.outsideIOR,
+            maxSlope: settings.maxSurfaceSlope,
+            iterations: settings.transportIterations,
+          })
+          device.queue.writeBuffer(coarse.initial, 0, start)
+          coarse.initialPending = true
+        }
         resetPending = true
         iteration = 0
         lossHistory.length = 0
+        coarse?.optimizer.setTarget(target)
       },
 
       encodeStep(encoder, input): OptimizationStepResult {
@@ -400,16 +507,53 @@ export async function createLensOptimizer(
           throw new Error('Lens grid and receiver must match the optimizer setup.')
         }
 
+        if (input.lens.heightBuffer !== heights) {
+          encoder.copyBufferToBuffer(input.lens.heightBuffer, 0, heights, 0, vertexCount * 4)
+        }
+        const lens: LensState = { ...input.lens, heightBuffer: heights }
         if (resetPending) {
           // New target: restart Adam from the current lens shape.
           encoder.clearBuffer(moments)
           encoder.clearBuffer(stepState)
           resetPending = false
+          if (coarse && coarse.initialPending) {
+            // Start the coarse grid from the global transport solution.
+            encoder.copyBufferToBuffer(coarse.initial, 0, coarse.heights, 0, coarse.heights.size)
+            coarse.initialPending = false
+            coarse.lens = { ...coarse.lens, heightBuffer: coarse.heights }
+            coarsePhase = true
+          } else if (coarse) {
+            // Warm-start the coarse grid from the current fine heights.
+            const pass = encoder.beginComputePass({ label: 'Restrict lens heights' })
+            pass.setPipeline(coarse.restrict)
+            pass.setBindGroup(0, coarse.transfer)
+            pass.dispatchWorkgroups(...coarse.coarseGrid)
+            pass.end()
+            coarse.lens = { ...coarse.lens, heightBuffer: coarse.heights }
+            coarsePhase = true
+          }
         }
-        if (input.lens.heightBuffer !== heights) {
-          encoder.copyBufferToBuffer(input.lens.heightBuffer, 0, heights, 0, vertexCount * 4)
+        if (coarse && coarsePhase) {
+          // Several cheap coarse steps per call, then one interpolation onto the
+          // fine grid. The caller previews the fine heights with its own forward.
+          let finished = false
+          for (let k = 0; k < settings.coarseStepsPerCall && !finished; k++) {
+            const update = coarse.optimizer.encodeStep(encoder,
+              { lens: coarse.lens, optics: input.optics, receiver: input.receiver })
+            coarse.lens = update.lens
+            finished = update.done
+          }
+          if (coarse.lens.heightBuffer !== coarse.heights) {
+            encoder.copyBufferToBuffer(coarse.lens.heightBuffer, 0, coarse.heights, 0, coarse.heights.size)
+          }
+          const pass = encoder.beginComputePass({ label: 'Prolong lens heights' })
+          pass.setPipeline(coarse.prolong)
+          pass.setBindGroup(0, coarse.transfer)
+          pass.dispatchWorkgroups(...vertexGrid)
+          pass.end()
+          coarsePhase = !finished
+          return { lens, done: false }
         }
-        const lens: LensState = { ...input.lens, heightBuffer: heights }
         const stepInput = { lens, optics: input.optics, receiver: input.receiver }
 
         const result = forward.encode(encoder, stepInput)
@@ -472,13 +616,14 @@ export async function createLensOptimizer(
           lossIteration = iteration - 1
         }
 
-        done = iteration >= settings.maxIterations
+        done = iteration >= fineSettings.maxIterations
         return { lens, done, preview: result }
       },
 
       destroy() {
         if (destroyed) return
         destroyed = true
+        coarse?.optimizer.destroy()
         for (const buffer of owned) buffer.destroy()
       },
     }

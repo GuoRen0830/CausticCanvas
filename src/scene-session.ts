@@ -1,6 +1,6 @@
 import type { Mat4 } from 'wgpu-matrix'
 import { config } from './config'
-import type { AppState, ForwardModel, LensOptimizer, ReceiverPlane } from './contracts'
+import type { AppState, ForwardModel, LensOptimizer, ReceiverPlane, TargetImage } from './contracts'
 import { createFlatLens } from './geometry/lens-mesh'
 import type { DesignView } from './optics/design-view'
 import { createForwardModel } from './optics/forward-model'
@@ -21,6 +21,8 @@ export async function createSceneSession(
   const lens = createFlatLens(device, { ...config.lens, sizeX: receiver.sizeX, sizeY: receiver.sizeY })
   const state: AppState = { target: null, lens, optics: { ...config.optics }, receiver }
   let forward: ForwardModel | undefined
+  let coarseForward: ForwardModel | undefined
+  let coarseHeights: GPUBuffer | undefined
   let optimizer: LensOptimizer | null = null
   let scene: Awaited<ReturnType<typeof createSceneRenderer>> | undefined
   let beams: ReturnType<typeof createBeamRenderer> | undefined
@@ -34,6 +36,8 @@ export async function createSceneSession(
     scene?.destroy()
     optimizer?.destroy()
     forward?.destroy()
+    coarseForward?.destroy()
+    coarseHeights?.destroy()
     lens.heightBuffer.destroy()
   }
 
@@ -44,7 +48,15 @@ export async function createSceneSession(
     display = createCausticDisplay(device, format)
     display.setExposure(config.rendering.causticExposure)
     forward = await createForwardModel(device, state, { designView })
-    optimizer = await createLensOptimizer(device, state, forward)
+    // Coarse-to-fine training traces the same scene on a coarse copy of the lens.
+    const coarseCells = config.optimizer.coarseGridCells
+    if (coarseCells > 0) {
+      const coarseLens = createFlatLens(device, { ...config.lens, sizeX: receiver.sizeX, sizeY: receiver.sizeY,
+        columns: coarseCells + 1, rows: coarseCells + 1 })
+      coarseHeights = coarseLens.heightBuffer
+      coarseForward = await createForwardModel(device, { ...state, lens: coarseLens }, { designView })
+    }
+    optimizer = await createLensOptimizer(device, state, forward, config.optimizer, { coarseForward })
     const simulation = createSimulation(state, forward, optimizer ?? undefined)
     const initial = device.createCommandEncoder({ label: 'Initial scene evaluation' })
     let result = simulation.encode(initial).result
@@ -52,11 +64,30 @@ export async function createSceneSession(
     display.setImage(result.caustic)
     device.queue.submit([initial.finish()])
 
+    // The panel starts exposed for the unlit scene. Once there is a drawing,
+    // expose for the irradiance a fully painted pixel would get if all light
+    // landed on the drawing, so the drawing reads white whatever its area and
+    // stray light stays as dark as its share of the power.
+    let exposedVersion: number | null = null
+    const exposeFor = (target: TargetImage | null) => {
+      const version = target?.version ?? null
+      if (version === exposedVersion) return
+      exposedVersion = version
+      let paintedArea = 0
+      if (target) {
+        for (let i = 0; i < target.values.length; i++) paintedArea += target.values[i] * (designView.surfaceAreas[i] ?? 0)
+      }
+      const power = state.optics.incidentIrradiance * state.lens.sizeX * state.lens.sizeY
+      const drawing = config.rendering.drawingExposure > 0 && paintedArea > 0 && power > 0
+      display!.setExposure(drawing ? config.rendering.drawingExposure * paintedArea / power : config.rendering.causticExposure)
+    }
+
     return {
       state, canOptimize: !!optimizer, destroy,
       render(encoder: GPUCommandEncoder, output: GPUTexture, preview: GPUTexture, vp: Mat4,
         mode: BeamView, steps: number) {
         optimizer?.setTarget(state.target)
+        exposeFor(state.target)
         let done = false
         if (steps > 0) {
           const batch = simulation.encode(encoder, steps)

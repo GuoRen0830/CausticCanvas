@@ -54,19 +54,44 @@ export const config = {
     // Gaussian width in lens meters for blurring the optical height gradient
     // before regularization and Adam. Damps vertex-scale ripples on fine grids,
     // where each beam is smaller than a receiver pixel; 0 disables.
-    gradientSmoothingSigma: 0.003,
+    gradientSmoothingSigma: 0.0015,
     // Gaussian width in lens meters for blurring each Adam step; 0 disables.
     updateSmoothingSigma: 0,
+    // Coarse-to-fine: first optimize a grid with this many cells per side (it
+    // must divide the fine cell count; 0 disables), then interpolate it onto
+    // the fine grid and refine it for refineIterations steps at
+    // refineLearningRate. A gentle refinement keeps the coarse grid's sharp,
+    // low-haze focus; the full learning rate brings the haze back.
+    coarseGridCells: 128,
+    coarseIterations: 1500,
+    coarseLearningRate: 1e-4,
+    // Start the coarse grid from a global lens-to-target transport map
+    // (transport-init.ts) instead of the previous lens; 0 disables. Without
+    // it, light far from every stroke never gets pulled in and stays as
+    // faint filaments.
+    transportInit: 1,
+    // Sliced-transport passes for that map (about 7 ms each on 129 x 129).
+    transportIterations: 100,
+    // Coarse steps per encodeStep call; coarse steps are much cheaper.
+    coarseStepsPerCall: 10,
+    // Initial loss-filter width in pixels for the fine refinement after a coarse run.
+    refineLossBlurSigma: 2,
+    refineIterations: 300,
+    refineLearningRate: 3e-6,
     // Heights are projected to at least this exit-surface z in meters.
     minHeight: 0.002,
     // Read back the loss for logging every N iterations; 0 disables it.
     lossLogInterval: 100,
   },
   // Scheduling limit, independent of the optimizer's stopping policy.
-  maxStepsPerFrame: 1,
+  maxStepsPerFrame: 3,
   rendering: {
     maxPixelRatio: 2,
     // Display only; never changes optical power or the optimization target.
     causticExposure: 1,
+    // Light-view exposure once something is drawn, as the panel value of a
+    // fully painted pixel that receives its share of the light (x in x/(1+x)).
+    // Exposes for the drawing instead of the unlit scene; 0 keeps causticExposure.
+    drawingExposure: 3,
   },
 } as const

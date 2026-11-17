@@ -118,6 +118,8 @@ export interface ForwardModel {
   // Fixed physical area (m^2) per design pixel, zero for background.
   // Models without a scene use the uniform pixel area of the reference plane.
   readonly targetSurfaceAreas?: Float32Array
+  // Optional z of the first surface hit per design pixel, zero for background.
+  readonly targetDepths?: Float32Array
 
   // Keep the caustic image kind stable for this model instance.
   // Pipelines must be ready; all resources must use the encoder's device.
