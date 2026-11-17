@@ -1,9 +1,12 @@
 import type { DesignView } from '../src/optics/design-view'
+import { config } from '../src/config'
 
 // The fixed horizontal stroke that crosses the box top and the floor in the
 // 256 x 256 light view. Shared by the ?stroke acceptance gate and the study page.
 export const strokeReceiver = { width: 256, height: 256, sizeX: 0.4, sizeY: 0.4, z: 0.5 }
 export const strokeBox = { center: [0.05, 0.03, 0.3], size: [0.08, 0.08, 0.1] } as const
+// Both stroke benchmarks compare received watts against the original 1 W/m² source.
+export const strokeOptics = { ...config.optics, incidentIrradiance: 1 }
 
 export function strokeWeights(): Float32Array {
   return Float32Array.from({ length: 256 * 256 }, (_, i) => {

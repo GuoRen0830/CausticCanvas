@@ -15,7 +15,7 @@ export const config = {
   optics: {
     lensIOR: 1.5,
     outsideIOR: 1,
-    incidentIrradiance: 1,
+    incidentIrradiance: 3,
   } satisfies OpticalConfig,
   receiver: {
     z: 0.5,

@@ -57,8 +57,11 @@ fn planeSample(frag: vec2f) -> PlaneSample {
   // Preserve receiver aspect ratio and center it in the viewport.
   let scale = min(frame.targetSize.x / image.x, frame.targetSize.y / image.y);
   let p = (frag - 0.5 * (frame.targetSize - image * scale)) / scale;
-  let texel = vec2u(clamp(floor(p), vec2f(0), image - 1.0));
-  return PlaneSample(vec2i(texel), vec2u(texel.x, frame.image.y - 1u - texel.y),
+  let opticalPixel = vec2u(clamp(floor(p), vec2f(0), image - 1.0));
+  // Display optical row 0 at the top, as on the pad. The integration
+  // texture stores rows in the opposite order on both accumulation paths.
+  let texel = vec2u(opticalPixel.x, frame.image.y - 1u - opticalPixel.y);
+  return PlaneSample(vec2i(texel), opticalPixel,
                      all(p >= vec2f(0)) && all(p < image));
 }
 

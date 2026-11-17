@@ -33,9 +33,8 @@ export function createDrawingPad(
     let far = 0
     for (let i = 0; i < width * height; i++) far = Math.max(far, depths[2*i+1])
     for (let i = 0; i < width * height; i++) {
-      const j = 4 * ((height - 1 - Math.floor(i / width)) * width + i % width)
       const shade = view.surfaceAreas[i] > 0 ? 22 + 60 * (1 - depths[2*i+1] / far) : 2
-      image.data.set([shade, shade, shade, 255], j)
+      image.data.set([shade, shade, shade, 255], 4 * i)
     }
     ctx.putImageData(image, 0, 0)
     canvas.style.backgroundImage = `url(${guide.toDataURL()})`
@@ -60,17 +59,15 @@ export function createDrawingPad(
     let clipped = false
     const values = new Float32Array(width * height)
 
-    // White strokes use alpha as their weight. Flip rows for optical coordinates.
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const source = 4 * (y * width + x) + 3
-        const destination = (height - 1 - y) * width + x
-        if (pixels[source] && view?.surfaceAreas[destination] === 0) {
-          pixels[source] = 0
-          clipped = true
-        }
-        values[destination] = pixels[source] / 255
+    // Looking along +Z with +X to the right puts optical +Y down the screen.
+    // Guide, brush mask and solver target therefore share the same row order.
+    for (let i = 0; i < values.length; i++) {
+      const alpha = 4 * i + 3
+      if (pixels[alpha] && view?.surfaceAreas[i] === 0) {
+        pixels[alpha] = 0
+        clipped = true
       }
+      values[i] = pixels[alpha] / 255
     }
 
     if (clipped) context.putImageData(strokes, 0, 0)

@@ -7,7 +7,7 @@ import { lensShapeMetrics } from '../src/optimization/lens-metrics'
 import { buildSceneMesh } from '../src/rendering/scene-mesh'
 import { createSimulation } from '../src/simulation'
 import type { ForwardResult } from '../src/contracts'
-import { strokeBox, strokeFractions, strokeReceiver, strokeWeights } from './stroke-case'
+import { strokeBox, strokeFractions, strokeOptics, strokeReceiver, strokeWeights } from './stroke-case'
 
 // /check/training-study.html?smoothnessWeight=30&maxIterations=1500&every=250
 // Any config.optimizer key can be overridden from the query string. Extra keys:
@@ -53,7 +53,7 @@ async function run() {
   const receiver = { ...strokeReceiver }
   const lensSpec = { columns: grid, rows: grid, sizeX: 0.2, sizeY: 0.2, thickness: 0.01 }
   const lens = createFlatLens(device, lensSpec)
-  const state = { lens, receiver, optics: config.optics, target: null }
+  const state = { lens, receiver, optics: strokeOptics, target: null }
   const view = buildDesignView(buildSceneMesh(receiver, strokeBox), receiver)
   const solver = (await createForwardModel(device, state, { designView: view, timestamps }))!
   const optimizer = (await createLensOptimizer(device, state, solver, settings, { timestamps }))!

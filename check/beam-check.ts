@@ -79,7 +79,7 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
       let sum = 0, refSum = 0, absSum = 0, max = 0
       for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
         const i = y * width + x
-        const expected = ref[(height - 1 - y) * width + x]
+        const expected = ref[i]
         const error = Math.abs(plane[i] - expected)
         require(Math.abs(difference[i] - error) < 1e-4, 'Error view disagrees at ' + i)
         sum += plane[i]; refSum += expected; absSum += error; max = Math.max(max, error)
@@ -120,11 +120,10 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
     const blocked = await readView('solver', 'blocked')
     let matched = 0
     for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
-      const j = (height - 1 - y) * width + x
-      if (x >= 66 && x <= 94 && y >= 36 && y <= 61) continue // Box silhouette.
-      const value = tilted.plane[j]
-      if (value < 0.5 || [-width, -1, 1, width].some(d => Math.abs(tilted.plane[j + d] - value) > 0.01)) continue
       const i = y * width + x
+      if (x >= 66 && x <= 94 && y >= 36 && y <= 61) continue // Box silhouette.
+      const value = tilted.plane[i]
+      if (value < 0.5 || [-width, -1, 1, width].some(d => Math.abs(tilted.plane[i + d] - value) > 0.01)) continue
       require(Math.abs(visible[i] + blocked[i] - value) < 0.01, 'Tilted visible + blocked floor/plane mismatch')
       matched++
     }

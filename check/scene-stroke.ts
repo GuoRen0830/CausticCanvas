@@ -6,14 +6,14 @@ import { createLensOptimizer } from '../src/optimization/lens-optimizer'
 import { buildSceneMesh } from '../src/rendering/scene-mesh'
 import { createSimulation } from '../src/simulation'
 import type { ForwardResult } from '../src/contracts'
-import { strokeBox, strokeFractions, strokeReceiver, strokeWeights } from './stroke-case'
+import { strokeBox, strokeFractions, strokeOptics, strokeReceiver, strokeWeights } from './stroke-case'
 
 // Opt in with /check/beam-check.html?stroke. Keep the historical debug grid
 // and brush fixed even when the application's working grid changes.
 export async function checkSceneStroke(device: GPUDevice, report: (line: string) => void) {
   const receiver = { ...strokeReceiver }
   const lens = createFlatLens(device,{ columns: 33, rows: 33, sizeX: 0.2, sizeY: 0.2, thickness: 0.01 })
-  const state = { lens, receiver, optics: config.optics, target: null }
+  const state = { lens, receiver, optics: strokeOptics, target: null }
   const view = buildDesignView(buildSceneMesh(receiver,strokeBox),receiver)
   const solver = (await createForwardModel(device,state,{designView:view}))!
   const settings = { ...config.optimizer, maxIterations: 3000, lossLogInterval: 0 }

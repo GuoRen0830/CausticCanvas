@@ -1,4 +1,4 @@
-import { createLensOptimizer, normalizeTarget, type OptimizerSettings } from '../src/optimization/lens-optimizer'
+import { createLensOptimizer, incidentPower, normalizeTarget, type OptimizerSettings } from '../src/optimization/lens-optimizer'
 import { config } from '../src/config'
 import type { ForwardInput, ForwardModel, ForwardResult, LensState, TargetImage } from '../src/contracts'
 
@@ -182,9 +182,10 @@ async function main() {
     let r = opt.encodeStep(enc, { lens, optics, receiver }); lens = r.lens
     device.queue.submit([enc.finish()])
     check(lens.heightBuffer !== input.lens.heightBuffer, `${kind}: step returns optimizer-owned heights`)
-    const Tn = normalizeTarget(target, receiver, 0.04)!
+    const power = incidentPower(input)
+    const Tn = normalizeTarget(target, receiver, power)!
     const g = await readBuffer(device, toy.captured.pixelGradient!, 64 * 64 * 4)
-    const mean = 0.04 / 0.16
+    const mean = power / (receiver.sizeX * receiver.sizeY)
     let gErr = 0, gMax = 0
     for (let j = 0; j < g.length; j++) {
       // The first forward evaluates the flat lens, where E = mean.

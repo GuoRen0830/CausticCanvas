@@ -34,8 +34,8 @@ fn vertexMain(
   var output: VertexOutput;
   output.position = vec4<f32>(position, 0.0, 1.0);
 
-  // Match the image convention: row 0 is at the bottom.
-  output.uv = position * 0.5 + vec2<f32>(0.5);
+  // The top of the drawing pad and preview both show optical row 0 (-Y).
+  output.uv = position * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
 
   return output;
 }
