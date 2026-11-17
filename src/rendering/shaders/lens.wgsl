@@ -3,6 +3,9 @@ struct LensUniforms {
   model: mat4x4<f32>,
   gridSize: vec2<u32>,
   apertureSize: vec2<f32>,
+  relief: f32,
+  referenceHeight: f32,
+  padding: vec2f,
 }
 
 @group(0) @binding(0)
@@ -10,6 +13,8 @@ var<uniform> lensUniforms: LensUniforms;
 
 @group(0) @binding(1)
 var<storage, read> heights: array<f32>;
+
+@group(0) @binding(2) var<storage, read> heightBounds: vec2f;
 
 struct VertexOutput {
   @builtin(position) clipPosition: vec4<f32>,
@@ -34,7 +39,15 @@ fn vertexMain(
     gridPosition / gridExtent - vec2<f32>(0.5)
   ) * lensUniforms.apertureSize;
 
-  let position = vec3<f32>(xy, heights[vertexIndex]);
+  // Exaggerate displacement around the midpoint in this preview only.
+  // The shared optical height buffer is read-only and remains in meters.
+  let midpoint = 0.5 * (heightBounds.x + heightBounds.y);
+  let span = (heightBounds.y - heightBounds.x) * lensUniforms.relief;
+  let aperture = max(lensUniforms.apertureSize.x, lensUniforms.apertureSize.y);
+  // Uniform fitting preserves the exaggerated height-to-width ratio.
+  let fit = min(1.0, 0.6 * aperture / max(span, 1e-8));
+  let height = (heights[vertexIndex] - midpoint) * lensUniforms.relief;
+  let position = vec3<f32>(xy, height) * fit + vec3f(0, 0, lensUniforms.referenceHeight);
 
   var output: VertexOutput;
   output.clipPosition = lensUniforms.mvp * vec4<f32>(position, 1.0);

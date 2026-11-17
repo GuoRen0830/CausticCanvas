@@ -3,14 +3,28 @@ struct Frame {
   inverseLocalVP: mat4x4f,
   grid: vec2u,
   aperture: vec2f,
-  pad: vec2f,
-  receiverSize: vec2f,
-  image: vec2u,
+  environmentLight: f32,
+  referenceIrradiance: f32,
   targetSize: vec2f,
-  receiverZ: f32,
   mode: u32,
   exposure: f32,
-  beamCount: u32,
+  padding2: vec2f,
+}
+
+// Fixed logarithmic scale relative to the incident lamp irradiance.
+// Ticks at 0, 1, 3, 7 and 15 times the lamp intensity are evenly spaced.
+fn irradianceHeat(value: f32) -> vec4f {
+  let t = clamp(log2(1.0 + max(value, 0.0) / frame.referenceIrradiance) / 4.0, 0.0, 1.0);
+  let dark = vec3f(0.035, 0.045, 0.10);
+  let blue = vec3f(0.13, 0.45, 0.85);
+  let cyan = vec3f(0.08, 0.80, 0.78);
+  let yellow = vec3f(1.0, 0.82, 0.20);
+  let white = vec3f(1.0, 0.97, 0.88);
+  var color = mix(dark, blue, clamp(4.0 * t, 0.0, 1.0));
+  color = mix(color, cyan, clamp(4.0 * t - 1.0, 0.0, 1.0));
+  color = mix(color, yellow, clamp(4.0 * t - 2.0, 0.0, 1.0));
+  color = mix(color, white, clamp(4.0 * t - 3.0, 0.0, 1.0));
+  return vec4f(color, 1.0);
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;

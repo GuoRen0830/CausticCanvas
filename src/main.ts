@@ -26,17 +26,16 @@ async function main() {
   const canvas = element('gpu-canvas', 'canvas'), causticCanvas = element('caustic-canvas', 'canvas')
   const targetCanvas = element('target-canvas', 'canvas'), clearButton = element('clear-target', 'button')
   const status = element('status', 'p'), causticStatus = element('caustic-status', 'p')
-  const targetStatus = element('target-status', 'p'), sceneStatus = element('scene-status', 'p')
+  const sceneStatus = element('scene-status', 'p')
   const importButton = element('import-obj', 'button'), objFile = element('obj-file', 'input')
   const folderButton = element('import-folder', 'button'), folderInput = element('asset-folder', 'input')
   const sceneSelect = element('bundled-scene', 'select'), beamSelect = element('beam-view', 'select')
   const credit = element('scene-credit', 'a')
-  const cameraHelp = element('camera-help', 'p')
   const panel = element('design-panel', 'aside'), undoButton = element('undo-target', 'button')
   const brushSize = element('brush-size', 'input')
+  const debugControl = element('debug-control', 'div')
   const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#view-switch button[data-view]'))
-  // Diagnostic views stay available behind ?debug.
-  beamSelect.hidden = !new URLSearchParams(location.search).has('debug')
+  let currentView: BeamView = 'lit'
   for (const [id, preset] of Object.entries(bundledScenes)) sceneSelect.add(new Option(preset.name, id))
   sceneSelect.value = defaultScene
   const events = { signal: lifetime.signal }
@@ -107,30 +106,22 @@ async function main() {
     }
   }
 
-  const viewHelp: Record<BeamView, string> = {
-    lit: 'Drag to look around · Scroll to zoom · Double-click to reset',
-    lens: 'The glass surface that makes the pattern · Drag to look around',
-    candidates: 'Candidate count · Blue 1 · Cyan 2 · Green 4 · Yellow 16 · Red 64+',
-    footprint: 'Visible floor irradiance after scene occlusion',
-    plane: 'Irradiance these beams would produce on the unobstructed reference plane',
-    difference: 'Absolute irradiance difference between the scene and the unobstructed plane',
-  }
-  function changeView() {
-    const mode = beamSelect.value as BeamView
+  function changeView(mode: BeamView = currentView) {
+    currentView = mode
+    const debug = mode !== 'lit' && mode !== 'lens'
+    debugControl.hidden = !debug
     const framing = mode === 'lens' ? lensFraming : sceneFraming
     if (currentFraming !== framing) {
       camera!.frame(framing)
       currentFraming = framing
     }
-    cameraHelp.textContent = viewHelp[mode]
-    for (const button of viewButtons) button.setAttribute('aria-pressed', String(button.dataset.view === mode))
+    for (const button of viewButtons) button.setAttribute('aria-pressed', String(button.dataset.view === (debug ? 'debug' : mode)))
     frameLoop?.requestFrame()
   }
-  beamSelect.addEventListener('change', changeView, events)
+  beamSelect.addEventListener('change', () => changeView(beamSelect.value as BeamView), events)
   for (const button of viewButtons) {
     button.addEventListener('click', () => {
-      beamSelect.value = button.dataset.view!
-      changeView()
+      changeView((button.dataset.view === 'debug' ? beamSelect.value : button.dataset.view) as BeamView)
     }, events)
   }
   clearButton.addEventListener('click', () => pad?.clear(), events)
@@ -157,7 +148,7 @@ async function main() {
   }
 
   function encodeFrame(steps: number) {
-    const { done, commands } = drawSceneFrame(active!, steps, beamSelect.value as BeamView)
+    const { done, commands } = drawSceneFrame(active!, steps, currentView)
     if (done) { optimizationDone = true; updateRunState() }
     return commands
   }
@@ -216,7 +207,6 @@ async function main() {
         next.state.target = target
         optimizationDone = false
         hasTarget = target.values.some(value => value > 0)
-        targetStatus.textContent = hasTarget ? '' : 'Try a word, a shape, or a single line.'
         if (runTimer !== undefined) runStarted = performance.now()
         updateRunState()
         frameLoop?.requestFrame()
@@ -245,8 +235,7 @@ async function main() {
       }
       // The model credit lives in the scene picker's tooltip.
       sceneSelect.title = activePreset ? credit.textContent : ''
-      beamSelect.value = 'lit'
-      changeView()
+      changeView('lit')
       activeLabel = name
       sceneStatus.textContent = [...warnings].join(' ')
       status.textContent = ''

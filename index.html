@@ -32,7 +32,6 @@
       <aside id="design-panel">
         <div class="panel-head">
           <h2>Draw the light</h2>
-          <p class="hint">Paint where the light should land. The view is from the lamp, looking down.</p>
         </div>
 
         <canvas id="target-canvas" aria-label="Light pattern drawing pad"></canvas>
@@ -45,7 +44,6 @@
           <button id="undo-target" class="quiet" type="button" disabled>Undo</button>
           <button id="clear-target" class="quiet" type="button">Clear</button>
         </div>
-        <p id="target-status" class="hint"></p>
 
         <div id="progress" aria-hidden="true"><span></span></div>
 
@@ -61,17 +59,20 @@
         </section>
       </aside>
 
-      <div id="view-switch" role="group" aria-label="View">
-        <button type="button" data-view="lit" aria-pressed="true">Room</button>
-        <button type="button" data-view="lens" aria-pressed="false">Glass</button>
-        <select id="beam-view" aria-label="Debug view" hidden>
-          <option value="lit">Lit scene</option>
-          <option value="lens">Lens shape</option>
-          <option value="candidates">Candidate pixels</option>
-          <option value="footprint">Floor footprint</option>
-          <option value="plane">Unobstructed plane</option>
-          <option value="difference">Scene vs. plane difference</option>
-        </select>
+      <div id="view-controls">
+        <div id="debug-control" hidden>
+          <select id="beam-view" aria-label="Debug view">
+            <option value="irradiance">Surface irradiance</option>
+            <option value="candidates">Splat candidates</option>
+            <option value="normals">Surface normals</option>
+            <option value="albedo">Base color</option>
+          </select>
+        </div>
+        <div id="view-switch" role="group" aria-label="View">
+          <button type="button" data-view="lit" aria-pressed="true">Room</button>
+          <button type="button" data-view="lens" aria-pressed="false">Glass</button>
+          <button type="button" data-view="debug" aria-pressed="false">Debug</button>
+        </div>
       </div>
 
       <footer id="footnote">

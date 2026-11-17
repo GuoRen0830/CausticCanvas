@@ -82,7 +82,6 @@ fn splatFS(input: Splat) -> @location(0) vec4f {
   let pixel = vec2i(input.position.xy);
   let visible = textureLoad(sceneObject, pixel, 0);
   if (visible.r != input.objectId) { discard; }
-  if (frame.mode == 2u && textureLoad(normalAndFloor, pixel, 0).a < 0.5) { discard; }
   let geometric = unpack4x8snorm(visible.g).xyz;
   if (dot(geometric, input.plane.xyz) < 0.85) { discard; }
   let ndc = input.position.xy / frame.targetSize * vec2f(2,-2) + vec2f(-1,1);

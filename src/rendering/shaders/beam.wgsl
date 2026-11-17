@@ -1,56 +1,3 @@
-struct Bounds {
-  @builtin(position) position: vec4f,
-  // Receiver pixel units, with positive Y up. Constant across a beam rectangle.
-  @location(0) @interpolate(flat) a: vec2f,
-  @location(1) @interpolate(flat) b: vec2f,
-  @location(2) @interpolate(flat) c: vec2f,
-  @location(3) @interpolate(flat) irradiance: f32,
-}
-
-fn receiverXY(s: vec3f, d: vec3f) -> vec2f {
-  return s.xy + ((frame.receiverZ - s.z) / d.z) * d.xy;
-}
-
-fn receiverPixel(xy: vec2f) -> vec2f {
-  return (xy / frame.receiverSize + 0.5) * vec2f(frame.image);
-}
-
-@vertex
-fn boundsVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u32) -> Bounds {
-  var out: Bounds;
-  out.position = vec4f(2, 2, 0, 1); // Collapse all four vertices of a skipped beam.
-  let ray = beams[face];
-  if (!(ray.w > 0.0 && ray.z > 1e-6)) { return out; }
-
-  let ids = sourceIds(face);
-  var lo = vec2f(1e30);
-  var hi = vec2f(-1e30);
-  var corners: array<vec2f, 3>;
-  for (var j = 0u; j < 3u; j++) {
-    let s = sourceVertex(ids[j]);
-    if (!(frame.receiverZ > s.z)) { return out; }
-    let foot = receiverXY(s, ray.xyz);
-    corners[j] = receiverPixel(foot);
-    let ndc = 2.0 * foot / frame.receiverSize;
-    lo = min(lo, ndc);
-    hi = max(hi, ndc);
-  }
-  let doubleArea = cross2(corners[1] - corners[0], corners[2] - corners[0]);
-  if (!(0.5 * abs(doubleArea) > 1e-8)) { return out; }
-  // CCW winding lets adjacent faces use a complementary half-open edge rule.
-  out.a = corners[0];
-  out.b = select(corners[2], corners[1], doubleArea > 0.0);
-  out.c = select(corners[1], corners[2], doubleArea > 0.0);
-  let pixelSize = frame.receiverSize / vec2f(frame.image);
-  out.irradiance = ray.w / (0.5 * abs(doubleArea) * pixelSize.x * pixelSize.y);
-  let pad = 2.0 / vec2f(frame.image);
-  lo = clamp(lo - pad, vec2f(-1), vec2f(1));
-  hi = clamp(hi + pad, vec2f(-1), vec2f(1));
-  let corner = vec2f(f32(vertex & 1u), f32(vertex >> 1u));
-  out.position = vec4f(mix(lo, hi, corner), 0, 1);
-  return out;
-}
-
 @vertex
 fn fullscreenVS(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
   let corners = array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
@@ -60,10 +7,8 @@ fn fullscreenVS(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
 override materialLighting: bool = false;
 override encodeCanvas: bool = false;
 
-// Near-white lamp in a dark room; a faint neutral fill keeps the model readable.
+// Near-white lamp with a neutral hemispheric fill configured independently of the lamp.
 const lampColor = vec3f(1.0, 0.97, 0.92);
-const fillSky = vec3f(0.08);
-const fillGround = vec3f(0.025);
 
 fn decodeNormal(pixel: vec2i) -> vec3f {
   return textureLoad(normalAndFloor, pixel, 0).xyz * (255.0 / 127.0) - 128.0 / 127.0;
@@ -120,8 +65,6 @@ fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     color = mix(color, red, clamp(0.5 * (level - 4.0), 0.0, 1.0));
     return vec4f(color, 1);
   }
-  if (frame.mode == 2u) { return displayColor(light.r, frame.exposure); }
-
   let uv = frag.xy / frame.targetSize;
 
   let surface = textureLoad(albedo, pixel, 0);
@@ -130,11 +73,20 @@ fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     return present(mix(vec3f(0.018), vec3f(0.004), uv.y));
   }
 
+  // Read the unfiltered irradiance so this view exposes sampling noise.
+  if (frame.mode == 2u) { return irradianceHeat(light.r); }
+  if (frame.mode == 3u) {
+    let local = normalize(decodeNormal(pixel));
+    let world = vec3f(local.x, -local.z, local.y);
+    return vec4f(world * 0.5 + 0.5, 1);
+  }
+  if (frame.mode == 4u) { return present(surface.rgb); }
+
   var base = surface.rgb;
   if (!materialLighting) { base *= vec3f(1.0, 0.78, 0.38); }
   let n = decodeNormal(pixel);
   // The lamp shines along +Z, so surfaces facing -Z look up towards it.
-  let fill = mix(fillGround, fillSky, 0.5 - 0.5 * n.z);
+  let fill = frame.environmentLight * mix(0.35, 1.0, clamp(0.5 - 0.5 * n.z, 0.0, 1.0));
   let irradiance = smoothedIrradiance(pixel, n);
   let radiance = base * (fill + lampColor * (frame.exposure * irradiance / 3.14159265));
   return present(filmic(0.9 * radiance));

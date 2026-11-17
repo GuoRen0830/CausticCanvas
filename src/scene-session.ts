@@ -45,6 +45,7 @@ export async function createSceneSession(
     scene = await createSceneRenderer(device, geometry.mesh, opticalToWorld, geometry.materials, warn)
     beams = createBeamRenderer(device, format, opticalToWorld,
       config.rendering.causticExposure, geometry)
+    beams.setEnvironmentLight(config.rendering.environmentLight)
     display = createCausticDisplay(device, format)
     display.setExposure(config.rendering.causticExposure)
     forward = await createForwardModel(device, state, { designView })
@@ -99,9 +100,11 @@ export async function createSceneSession(
           display!.setImage(result.caustic)
         }
         if (mode === 'lens') {
-          lensPreview ??= createLensRenderer(device, format, state.lens, opticalToWorld)
-          lensPreview.update(state.lens, vp)
+          lensPreview ??= createLensRenderer(device, format, state.lens, opticalToWorld, config.lens.thickness)
+          lensPreview.update(state.lens, vp, config.rendering.lensRelief)
+          lensPreview.prepare(encoder)
         }
+        beams!.setReferenceIrradiance(state.optics.incidentIrradiance)
         scene!.update(vp)
         beams!.render(encoder, output, vp, mode, result, scene!.draw, pass => lensPreview?.draw(pass))
         const pass = encoder.beginRenderPass({ label: 'Caustic preview', colorAttachments: [{
