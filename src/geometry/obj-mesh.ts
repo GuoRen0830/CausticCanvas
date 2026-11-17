@@ -1,4 +1,4 @@
-import { sceneVertexStride, type SceneMesh } from '../rendering/scene-mesh'
+import { sceneVertexStride, type SceneDraw, type SceneMesh } from '../rendering/scene-mesh'
 
 type Triple = [number, number, number]
 const defaultAlbedo = [0.7, 0.7, 0.7] as const
@@ -30,10 +30,9 @@ function faceCorner(token: string, positionCount: number, texcoordCount: number,
   const parts = token.split('/')
   if (parts.length > 3 || parts.at(-1) === '') invalid(line, `Invalid face corner "${token}".`)
   const position = objIndex(parts[0], positionCount, 'position', line)
-  // UVs have their own index stream. The current scene vertex format has no UV attribute.
-  if (parts[1]) objIndex(parts[1], texcoordCount, 'texture coordinate', line)
+  const uv = parts[1] ? objIndex(parts[1], texcoordCount, 'texture coordinate', line) : undefined
   const normal = parts[2] === undefined ? undefined : objIndex(parts[2], normalCount, 'normal', line)
-  return { position, normal }
+  return { position, normal, uv }
 }
 
 function unit(x: number, y: number, z: number, line: number, error: string): Triple {
@@ -50,10 +49,13 @@ function faceNormal(a: Triple, b: Triple, c: Triple, line: number): Triple {
 
 // Read a triangulated polygon OBJ in its original coordinate system and units.
 // Explicit vertex normals preserve hard/smooth edges. Missing normals use the face winding.
-export function parseObjMesh(text: string): SceneMesh {
+export function parseObjMesh(text: string): SceneMesh & { materialLibraries: string[] } {
   const positions: Triple[] = []
   const normals: Triple[] = []
-  let texcoordCount = 0
+  const texcoords: [number, number][] = []
+  const uvs: number[] = []
+  const materialLibraries: string[] = [], draws: SceneDraw[] = []
+  let material: string | undefined
   const vertices: number[] = []
   const indices: number[] = []
   const shared = new Map<string, number>()
@@ -76,10 +78,17 @@ export function parseObjMesh(text: string): SceneMesh {
         positions.push([x, y, z])
         break
       }
-      case 'vt':
+      case 'vt': {
         if (args.length < 1 || args.length > 3) invalid(line, 'Expected vt with one to three coordinates.')
-        for (const value of args) coordinate(value, line)
-        texcoordCount++
+        const [u, v = 0] = args.map(value => coordinate(value, line))
+        texcoords.push([u, v])
+        break
+      }
+      case 'mtllib':
+        materialLibraries.push(args.join(' '))
+        break
+      case 'usemtl':
+        material = args.join(' ').replace(/^"(.*)"$/, '$1') || undefined
         break
       case 'vn': {
         if (args.length !== 3) invalid(line, 'Expected vn x y z.')
@@ -96,7 +105,7 @@ export function parseObjMesh(text: string): SceneMesh {
         break
       case 'f': {
         if (args.length !== 3) invalid(line, `Expected a triangle, got ${args.length} corners. Triangulate the mesh before export.`)
-        const corners = args.map(token => faceCorner(token, positions.length, texcoordCount, normals.length, line))
+        const corners = args.map(token => faceCorner(token, positions.length, texcoords.length, normals.length, line))
         const [a, b, c] = corners
         const flat = faceNormal(positions[a.position], positions[b.position], positions[c.position], line)
         // Maya can export groups without named objects. Keep object IDs stable across material changes.
@@ -107,27 +116,34 @@ export function parseObjMesh(text: string): SceneMesh {
           if (objectId > 0xffffff) invalid(line, 'Too many scene objects.')
           objects.set(name, objectId)
         }
-        for (const { position, normal } of corners) {
-          const key = normal === undefined ? undefined : `${objectId}/${position}/${normal}`
+        const hasUV = corners.every(corner => corner.uv !== undefined)
+        const last = draws.at(-1)
+        if (last && last.material === material && last.hasUV === hasUV) last.indexCount += 3
+        else draws.push({ firstIndex: indices.length, indexCount: 3, material, hasUV })
+        for (const { position, normal, uv } of corners) {
+          const key = normal === undefined ? undefined : `${objectId}/${position}/${normal}/${uv ?? ''}`
           let index = key === undefined ? undefined : shared.get(key)
           if (index === undefined) {
             index = vertices.length / sceneVertexStride
             vertices.push(...positions[position], ...(normal === undefined ? flat : normals[normal]),
               ...defaultAlbedo, 0, objectId)
+            if (uv !== undefined) uvs.push(...texcoords[uv])
+            else uvs.push(0, 0)
             if (key !== undefined) shared.set(key, index)
           }
           indices.push(index)
         }
         break
       }
-      // Material, smoothing and other non-polygon records do not add triangles.
+      // Other non-polygon records do not add triangles.
     }
   }
   if (!indices.length) throw new Error('OBJ contains no triangle faces.')
-  return { vertices: new Float32Array(vertices), indices: new Uint32Array(indices) }
+  return { vertices: new Float32Array(vertices), indices: new Uint32Array(indices), draws, materialLibraries,
+    uvs: texcoords.length ? new Float32Array(uvs) : undefined }
 }
 
 // File extends Blob, so the file picker can use this entry point directly.
-export async function readObjMesh(file: Blob): Promise<SceneMesh> {
+export async function readObjMesh(file: Blob) {
   return parseObjMesh(await file.text())
 }

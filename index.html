@@ -15,12 +15,18 @@
 
       <main id="workspace">
         <aside id="design-panel">
+          <label for="bundled-scene">Scene</label>
+          <select id="bundled-scene" disabled>
+            <option value="" hidden>Select a scene</option>
+          </select>
           <div class="scene-actions">
             <button id="import-obj" type="button" disabled>Import OBJ</button>
-            <input id="obj-file" type="file" accept=".obj" hidden />
-            <button id="default-scene" type="button" hidden>Default box</button>
+            <input id="obj-file" type="file" accept=".obj,.mtl,.png,.jpg,.jpeg,.webp" multiple hidden />
+            <button id="import-folder" type="button" title="Select a folder containing the OBJ, MTL and Base Color images" disabled>Import folder</button>
+            <input id="asset-folder" type="file" webkitdirectory multiple hidden />
           </div>
-          <p id="scene-status" role="status">Default box</p>
+          <p id="scene-status" role="status">Loading Greer Park Skating Bowl…</p>
+          <a id="scene-credit" target="_blank" rel="noopener" hidden></a>
           <h2>Design the light</h2>
           <p>Paint on the scene as seen from the light.</p>
 
@@ -41,26 +47,12 @@
 
         <section id="viewport">
           <div id="beam-control">
-            <label>Light source
-              <select id="beam-source">
-                <option value="solver">Solver beams</option>
-                <option value="single">Single test beam</option>
-                <option value="pair">Two overlapping beams</option>
-              </select>
-            </label>
-            <label>Scene lighting
-              <select id="scene-method">
-                <option value="first-hit">BVH first hit</option>
-                <option value="analytic">Box reference</option>
-              </select>
-            </label>
             <label>View
               <select id="beam-view">
                 <option value="lit">Lit scene</option>
                 <option value="lens">Lens shape</option>
                 <option value="candidates">Candidate pixels</option>
                 <option value="footprint">Floor footprint</option>
-                <option value="blocked">Blocked irradiance (box reference)</option>
                 <option value="plane">Unobstructed plane</option>
                 <option value="difference">Scene vs. plane difference</option>
               </select>

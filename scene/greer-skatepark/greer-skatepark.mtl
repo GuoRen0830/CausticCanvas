@@ -1,0 +1,28 @@
+newmtl color_0
+Kd 1 1 1
+map_Kd -clamp on textures/base-color-1.webp
+
+newmtl color_1
+Kd 1 1 1
+map_Kd -clamp on textures/base-color-2.webp
+
+newmtl color_2
+Kd 1 1 1
+map_Kd -clamp on textures/base-color-3.webp
+
+newmtl color_3
+Kd 1 1 1
+map_Kd -clamp on textures/base-color-4.webp
+
+newmtl color_4
+Kd 1 1 1
+map_Kd -clamp on textures/base-color-5.webp
+
+newmtl color_5
+Kd 1 1 1
+map_Kd -clamp on textures/base-color-6.webp
+
+newmtl color_6
+Kd 1 1 1
+map_Kd -clamp on textures/base-color-7.webp
+

@@ -1,5 +1,8 @@
 # 场景训练调参记录（2026-11-16）
 
+> Historical measurements below used the retired box benchmark. The current study page measures the bundled skatepark and reports illuminated model and scene fractions.
+
+
 实验页：`/check/training-study.html`。查询串可覆盖 `config.optimizer` 的任一字段，另有
 `grid`（每边顶点数，默认 33）、`every`（检查点间隔）、`timing`（用 timestamp-query 平均的步数）。
 每个检查点输出笔画内能量占比（与 `?stroke` 门槛同一口径）、透镜形状指标

@@ -7,11 +7,13 @@ import { lensShapeMetrics } from '../src/optimization/lens-metrics'
 import { buildSceneGeometry } from '../src/rendering/scene-mesh'
 import { createSimulation } from '../src/simulation'
 import type { ForwardResult } from '../src/contracts'
-import { strokeBox, strokeFractions, strokeOptics, strokeReceiver, strokeWeights } from './stroke-case'
+import { defaultScene, readBundledScene } from '../src/geometry/bundled-scenes'
+import { placeObjOnReceiver } from '../src/geometry/place-obj'
+import { strokeFractions, strokeWeights } from './stroke-case'
 
 // /check/training-study.html?smoothnessWeight=30&maxIterations=1500&every=250
 // Any config.optimizer key can be overridden from the query string. Extra keys:
-//   grid    lens vertices per side (default 33, as in the ?stroke gate)
+//   grid    lens vertices per side (default 33)
 //   every   checkpoint interval in iterations (default 250)
 //   timing  GPU timestamp steps to average per pass (default 20; 0 disables)
 // Reports image quality (stroke fractions), lens shape metrics and timing as JSON.
@@ -50,15 +52,16 @@ async function run() {
     return { querySet, beginningOfPassWriteIndex: index, endOfPassWriteIndex: index + 1 }
   }
 
-  const receiver = { ...strokeReceiver }
-  const lensSpec = { columns: grid, rows: grid, sizeX: 0.2, sizeY: 0.2, thickness: 0.01 }
+  const { mesh } = await readBundledScene(defaultScene)
+  const { receiver } = placeObjOnReceiver(mesh, config.lens, config.receiver)
+  const lensSpec = { ...config.lens, columns: grid, rows: grid, sizeX: receiver.sizeX, sizeY: receiver.sizeY }
   const lens = createFlatLens(device, lensSpec)
-  const state = { lens, receiver, optics: strokeOptics, target: null }
-  const view = buildDesignView(buildSceneGeometry(receiver, { box: strokeBox }).mesh, receiver)
+  const state = { lens, receiver, optics: config.optics, target: null }
+  const view = buildDesignView(buildSceneGeometry(receiver, { mesh }).mesh, receiver)
   const solver = (await createForwardModel(device, state, { designView: view, timestamps }))!
   const optimizer = (await createLensOptimizer(device, state, solver, settings, { timestamps }))!
   const sim = createSimulation(state, solver, optimizer)
-  const weights = strokeWeights()
+  const weights = strokeWeights(receiver)
   const pixels = receiver.width * receiver.height, vertices = grid * grid
   const staging = device.createBuffer({ size: Math.max(pixels, 2 * vertices) * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST })
   async function read(source: GPUBuffer, count: number) {
@@ -72,7 +75,7 @@ async function run() {
   }
 
   log({ settings, grid, vertices, faces: 2 * (grid - 1) ** 2, timestampQuery: canTime, adapter: adapter.info?.description || adapter.info?.vendor })
-  optimizer.setTarget({ version: 1, width: 256, height: 256, values: weights })
+  optimizer.setTarget({ version: 1, width: receiver.width, height: receiver.height, values: weights })
 
   // Per-pass GPU time, averaged over the first steps (widest loss filter).
   const passTotals = new Map<string, number>()
@@ -133,9 +136,9 @@ async function run() {
     const rootV = Array.from({ length: vertices }, (_, i) => Math.sqrt(mv[2 * i + 1])).sort((a, b) => a - b)
     const point = {
       iteration,
-      topPct: +(100 * fractions.topFraction).toFixed(2),
+      modelPct: +(100 * fractions.modelFraction).toFixed(2),
       scenePct: +(100 * fractions.sceneFraction).toFixed(2),
-      topW: +fractions.top.toFixed(5),
+      modelW: +fractions.model.toFixed(5),
       totalW: +fractions.total.toFixed(5),
       lapRms: +shape.laplacianRms.toFixed(3),
       rippleRms: +shape.rippleRms.toFixed(3),
@@ -151,9 +154,8 @@ async function run() {
     lastHeights = heights
     log(point)
   }
-  const gate = checkpoints.find(p => p.topPct > 82 && p.scenePct > 72 && p.topW > 0.005 && p.totalW > 0.025)
   const final = checkpoints[checkpoints.length - 1]
-  const summary = { final, firstGateIteration: gate?.iteration ?? null, errors }
+  const summary = { final, errors }
   ;(window as any).studyResult = { settings, grid, checkpoints, ...summary, heights: Array.from(lastHeights) }
   log(summary)
   staging.destroy(); resolve.destroy(); readTimes.destroy(); querySet?.destroy()

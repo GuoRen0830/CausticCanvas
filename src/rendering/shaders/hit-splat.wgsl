@@ -1,3 +1,4 @@
+@group(2) @binding(0) var<storage, read> triangles: array<Triangle>;
 @group(0) @binding(5) var sceneObject: texture_2d<u32>;
 @group(2) @binding(3) var<storage, read> cachedHits: array<Hit>;
 

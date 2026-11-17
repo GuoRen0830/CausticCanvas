@@ -1,11 +1,11 @@
 import type { Mat4 } from 'wgpu-matrix'
 import { config } from './config'
-import type { AppState, ForwardModel, LensOptimizer } from './contracts'
+import type { AppState, ForwardModel, LensOptimizer, ReceiverPlane } from './contracts'
 import { createFlatLens } from './geometry/lens-mesh'
 import type { DesignView } from './optics/design-view'
 import { createForwardModel } from './optics/forward-model'
 import { createLensOptimizer } from './optimization/lens-optimizer'
-import { createBeamRenderer, type BeamSource, type BeamView, type SceneMethod } from './rendering/beam-renderer'
+import { createBeamRenderer, type BeamView } from './rendering/beam-renderer'
 import { createCausticDisplay } from './rendering/caustic-display'
 import { createLensRenderer } from './rendering/lens-renderer'
 import type { SceneGeometry } from './rendering/scene-mesh'
@@ -15,13 +15,14 @@ import { createSimulation } from './simulation'
 // A scene owns its lens, training state and draw resources. A failed replacement
 // can be discarded before the active scene or its drawing pad is touched.
 export async function createSceneSession(
-  device: GPUDevice, format: GPUTextureFormat, opticalToWorld: Mat4, geometry: SceneGeometry, designView: DesignView,
+  device: GPUDevice, format: GPUTextureFormat, opticalToWorld: Mat4, geometry: SceneGeometry, receiver: ReceiverPlane, designView: DesignView,
+  warn: (message: string) => void = console.warn,
 ) {
-  const lens = createFlatLens(device, config.lens)
-  const state: AppState = { target: null, lens, optics: { ...config.optics }, receiver: { ...config.receiver } }
+  const lens = createFlatLens(device, { ...config.lens, sizeX: receiver.sizeX, sizeY: receiver.sizeY })
+  const state: AppState = { target: null, lens, optics: { ...config.optics }, receiver }
   let forward: ForwardModel | undefined
   let optimizer: LensOptimizer | null = null
-  let scene: ReturnType<typeof createSceneRenderer> | undefined
+  let scene: Awaited<ReturnType<typeof createSceneRenderer>> | undefined
   let beams: ReturnType<typeof createBeamRenderer> | undefined
   let display: ReturnType<typeof createCausticDisplay> | undefined
   let lensPreview: ReturnType<typeof createLensRenderer> | undefined
@@ -37,8 +38,8 @@ export async function createSceneSession(
   }
 
   try {
-    scene = createSceneRenderer(device, geometry.mesh, opticalToWorld)
-    beams = createBeamRenderer(device, format, config.lens, state.receiver, opticalToWorld,
+    scene = await createSceneRenderer(device, geometry.mesh, opticalToWorld, geometry.materials, warn)
+    beams = createBeamRenderer(device, format, opticalToWorld,
       config.rendering.causticExposure, geometry)
     display = createCausticDisplay(device, format)
     display.setExposure(config.rendering.causticExposure)
@@ -54,7 +55,7 @@ export async function createSceneSession(
     return {
       state, canOptimize: !!optimizer, destroy,
       render(encoder: GPUCommandEncoder, output: GPUTexture, preview: GPUTexture, vp: Mat4,
-        source: BeamSource, mode: BeamView, method: SceneMethod, steps: number) {
+        mode: BeamView, steps: number) {
         optimizer?.setTarget(state.target)
         let done = false
         if (steps > 0) {
@@ -68,7 +69,7 @@ export async function createSceneSession(
           lensPreview.update(state.lens, vp)
         }
         scene!.update(vp)
-        beams!.render(encoder, output, vp, source, mode, result, scene!.draw, pass => lensPreview?.draw(pass), method)
+        beams!.render(encoder, output, vp, mode, result, scene!.draw, pass => lensPreview?.draw(pass))
         const pass = encoder.beginRenderPass({ label: 'Caustic preview', colorAttachments: [{
           view: preview.createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store',
         }] })

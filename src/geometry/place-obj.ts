@@ -1,10 +1,10 @@
 import type { ReceiverPlane } from '../contracts'
 import { sceneVertexStride, type SceneMesh } from '../rendering/scene-mesh'
 
-// Fit the freshly parsed Y-up model into the illuminated part of the floor.
-// Bake one rigid rotation and uniform scale into every object in the file.
+// One uniform scale preserves the Y-up mesh. Its top-down bounds determine the
+// aperture, receiver and target raster in the same optical coordinate system.
 export function placeObjOnReceiver(
-  mesh: SceneMesh, lens: { sizeX: number; sizeY: number; thickness: number }, receiver: ReceiverPlane,
+  mesh: SceneMesh, lens: { sizeX: number; sizeY: number; thickness: number }, limits: ReceiverPlane,
 ) {
   const v = mesh.vertices
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]
@@ -14,13 +14,13 @@ export function placeObjOnReceiver(
       hi[axis] = Math.max(hi[axis], v[i + axis])
     }
   }
-  const headroom = receiver.z - lens.thickness
+  const headroom = limits.z - lens.thickness
   // A small contact offset keeps a horizontal sheet distinguishable from the floor.
-  const floorZ = receiver.z - headroom * 1e-4
-  const scale = 0.8 * Math.min(
-    Math.min(lens.sizeX, receiver.sizeX) / (hi[0] - lo[0]),
-    Math.min(lens.sizeY, receiver.sizeY) / (hi[2] - lo[2]),
-    (floorZ - lens.thickness) / (hi[1] - lo[1]),
+  const floorZ = limits.z - headroom * 1e-4
+  const scale = Math.min(
+    Math.min(lens.sizeX, limits.sizeX) / (hi[0] - lo[0]),
+    Math.min(lens.sizeY, limits.sizeY) / (hi[2] - lo[2]),
+    0.9 * headroom / (hi[1] - lo[1]),
   )
   if (!Number.isFinite(scale) || scale <= 0) throw new Error('Cannot fit this model between the lens and floor.')
   const centerX = 0.5 * (lo[0] + hi[0]), centerZ = 0.5 * (lo[2] + hi[2])
@@ -33,5 +33,13 @@ export function placeObjOnReceiver(
     v[i + 4] = v[i + 5]
     v[i + 5] = -ny
   }
-  return { width: (hi[0] - lo[0]) * scale, height: (hi[1] - lo[1]) * scale, depth: (hi[2] - lo[2]) * scale }
+  const width = (hi[0] - lo[0]) * scale, height = (hi[1] - lo[1]) * scale, depth = (hi[2] - lo[2]) * scale
+  const pixelSize = Math.max(width / limits.width, depth / limits.height)
+  if (!(pixelSize > 0)) throw new Error('Model has no top-down extent.')
+  const receiver: ReceiverPlane = {
+    z: limits.z,
+    sizeX: Math.max(width, pixelSize), sizeY: Math.max(depth, pixelSize),
+    width: Math.max(1, Math.round(width / pixelSize)), height: Math.max(1, Math.round(depth / pixelSize)),
+  }
+  return { width, height, depth, receiver }
 }

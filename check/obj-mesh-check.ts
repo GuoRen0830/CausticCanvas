@@ -15,11 +15,14 @@ export async function checkObjMesh(report: (line: string) => void) {
     'v 0.0625 -0.0625 0.3125', 'v -0.0625 -0.0625 0.25',
     'vt 0 0', 'vt 1 0', 'vt 1 1', 'vn 1 0 -2',
     'g Panel', 'f 1/1/1 2/2/1 3/3/1', 'usemtl matte',
-    'f -4//-1 -2/2/-1 -1/3/-1 # same diagonal',
+    'f -4/1/-1 -2/3/-1 -1/2/-1 # same diagonal',
   ].join('\r\n')
   const model = await readObjMesh(new Blob([panel]))
   expect(model.vertices.length === 4 * sceneVertexStride && model.indices.join() === '0,1,2,0,2,3',
-    'position/normal pairs should be shared across faces and UV seams')
+    'identical position/normal/UV corners should be shared across materials')
+  const seam = parseObjMesh(panel + '\nf 1/2/1 3/3/1 4//1')
+  expect(seam.indices.slice(-3).join() === '4,2,5' && seam.uvs?.[8] === 1 && !seam.draws?.at(-1)?.hasUV,
+    'UV seams split vertices, incomplete UV triangles use the solid material')
   expect(Math.abs(model.vertices[3] - 1 / Math.sqrt(5)) < 1e-6 && model.vertices[5] < 0,
     'vertex normals must be normalized')
 
@@ -33,8 +36,10 @@ export async function checkObjMesh(report: (line: string) => void) {
 
   const receiver = { sizeX: 0.25, sizeY: 0.25, z: 0.5, width: 32, height: 32 }
   const geometry = buildSceneGeometry(receiver, { mesh: model })
-  expect(!geometry.referenceBox && geometry.mesh.indices.slice(6).join() === '4,5,6,4,6,7',
-    'custom scene must rebase indices past the floor and omit the analytic box')
+  expect(geometry.mesh.draws?.[2].firstIndex === 9 && geometry.mesh.uvs?.[10] === 1,
+    'rebase material ranges and UVs past the receiver floor')
+  expect(geometry.mesh.indices.slice(6).join() === '4,5,6,4,6,7',
+    'custom scene must rebase indices past the floor')
   const view = buildDesignView(geometry.mesh, receiver)
   const sample = (x: number, y: number) => {
     const i = y * receiver.width + x
@@ -51,16 +56,18 @@ export async function checkObjMesh(report: (line: string) => void) {
   // Offset Y-up asset: the roof rises toward +X, and its base is at Maya Y=0.
   const lens = { sizeX: 0.2, sizeY: 0.2, thickness: 0.01 }
   const wedge = parseObjMesh(wedgeObj)
-  placeObjOnReceiver(wedge, lens, receiver)
+  const fitted = placeObjOnReceiver(wedge, lens, receiver).receiver
   const v = wedge.vertices
-  expect(Math.abs(v[0] + 0.08) < 1e-6 && Math.abs(v[1] + 0.048) < 1e-6,
+  expect(Math.abs(v[0] + 0.1) < 1e-6 && Math.abs(v[1] + 0.06) < 1e-6,
     'center and uniformly scale Maya X/Z inside the aperture')
   expect(v[2] < receiver.z && receiver.z - v[2] < 1e-4 && v[5] === 1,
     'place the base just above the floor and rotate its downward normal')
-  const placed = buildDesignView(buildSceneGeometry(receiver, { mesh: wedge }).mesh, receiver)
+  expect(fitted.width === 32 && fitted.height === 19 && Math.abs(fitted.sizeY - 0.12) < 1e-7,
+    'the canvas and receiver must fit both dimensions of the model')
+  const placed = buildDesignView(buildSceneGeometry(fitted, { mesh: wedge }).mesh, fitted)
   const depths = new Float32Array(placed.samples.buffer)
-  const roofDepth = (x: number) => depths[2 * (16 * receiver.width + x) + 1]
-  expect(roofDepth(22) < roofDepth(10) && roofDepth(10) < roofDepth(1) && roofDepth(1) === receiver.z,
+  const roofDepth = (x: number) => depths[2 * (Math.floor(fitted.height / 2) * fitted.width + x) + 1]
+  expect(roofDepth(22) < roofDepth(10) && roofDepth(10) < roofDepth(1) && roofDepth(1) < receiver.z,
     'the transformed roof must be front-facing and rise to the right in the training view')
   const tall = parseObjMesh('v 0 0 0\nv 0 1000 0\nv 1 0 0\nf 1 2 3')
   placeObjOnReceiver(tall, lens, receiver)
