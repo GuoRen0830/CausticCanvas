@@ -3,7 +3,7 @@ struct Frame {
   inverseLocalVP: mat4x4f,
   grid: vec2u,
   aperture: vec2f,
-  offset: vec2f,
+  pad: vec2f,
   receiverSize: vec2f,
   image: vec2u,
   targetSize: vec2f,
@@ -11,8 +11,6 @@ struct Frame {
   mode: u32,
   exposure: f32,
   beamCount: u32,
-  boxMin: vec3f,
-  boxMax: vec3f,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -25,7 +23,7 @@ struct Frame {
 
 fn sourceVertex(id: u32) -> vec3f {
   let gridXY = vec2f(f32(id % frame.grid.x), f32(id / frame.grid.x));
-  let xy = (gridXY / vec2f(frame.grid - 1u) - 0.5) * frame.aperture + frame.offset;
+  let xy = (gridXY / vec2f(frame.grid - 1u) - 0.5) * frame.aperture;
   return vec3f(xy, heights[id]);
 }
 

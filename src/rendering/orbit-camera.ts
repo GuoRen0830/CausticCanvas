@@ -1,23 +1,22 @@
 import { mat4 } from 'wgpu-matrix'
 
-interface OrbitCameraOptions {
+export interface OrbitCameraOptions {
   target: [number, number, number]
-  span: number
+  size: [number, number, number]
 }
 
 export function createOrbitCamera(
   canvas: HTMLCanvasElement,
-  { target, span }: OrbitCameraOptions,
+  { target, size }: OrbitCameraOptions,
   onChange: () => void,
 ) {
-  // Start at the same oblique angle as the original preview.
   const initialAzimuth = Math.atan2(1.3, 1.8)
-  const initialElevation = Math.atan2(0.9, Math.hypot(1.3, 1.8))
-  const initialDistance = span * Math.hypot(1.3, 0.9, 1.8)
+  const initialElevation = Math.PI / 4
+  const verticalFov = Math.PI / 4
   const elevationLimit = Math.PI / 2 - 0.01
   let azimuth = initialAzimuth
   let elevation = initialElevation
-  let distance = initialDistance
+  let zoomFactor = 1
   let activePointer: number | null = null
   let previousX = 0
   let previousY = 0
@@ -26,6 +25,24 @@ export function createOrbitCamera(
   const view = mat4.identity()
   const projection = mat4.identity()
   const viewProjection = mat4.identity()
+
+  // Fit all eight corners in the initial view. Zoom and orbit remain independent.
+  function fitDistance(aspect: number) {
+    const sin = Math.sin(initialAzimuth), cos = Math.cos(initialAzimuth)
+    const up = Math.sin(initialElevation), horizontal = Math.cos(initialElevation)
+    const tanY = Math.tan(verticalFov / 2)
+    let distance = 0
+    for (const x of [-size[0] / 2, size[0] / 2])
+      for (const y of [-size[1] / 2, size[1] / 2])
+        for (const z of [-size[2] / 2, size[2] / 2]) {
+          const along = x * sin + z * cos
+          const depth = along * horizontal + y * up
+          const halfX = Math.abs(x * cos - z * sin)
+          const halfY = Math.abs(y * horizontal - along * up)
+          distance = Math.max(distance, depth + 1.12 * Math.max(halfX / aspect, halfY) / tanY)
+        }
+    return distance
+  }
 
   const releasePointer = () => {
     const pointer = activePointer
@@ -78,10 +95,7 @@ export function createOrbitCamera(
         ? Math.max(1, canvas.clientHeight)
         : 1
     const delta = Math.max(-1000, Math.min(1000, event.deltaY * unit))
-    distance = Math.max(span * 0.6, Math.min(
-      span * 10,
-      distance * Math.exp(delta * 0.001),
-    ))
+    zoomFactor = Math.max(0.25, Math.min(5, zoomFactor * Math.exp(delta * 0.001)))
     onChange()
   }
 
@@ -89,7 +103,7 @@ export function createOrbitCamera(
     releasePointer()
     azimuth = initialAzimuth
     elevation = initialElevation
-    distance = initialDistance
+    zoomFactor = 1
     onChange()
   }
 
@@ -104,14 +118,22 @@ export function createOrbitCamera(
   window.addEventListener('blur', releasePointer, options)
 
   return {
+    frame(next: OrbitCameraOptions) {
+      target = next.target
+      size = next.size
+      reset()
+    },
+
     update(aspect: number) {
       // Y is up; azimuth turns around Y and elevation rises above XZ.
+      const span = Math.max(...size)
+      const distance = fitDistance(aspect) * zoomFactor
       const horizontalDistance = distance * Math.cos(elevation)
       eye[0] = target[0] + horizontalDistance * Math.sin(azimuth)
       eye[1] = target[1] + distance * Math.sin(elevation)
       eye[2] = target[2] + horizontalDistance * Math.cos(azimuth)
       mat4.lookAt(eye, target, [0, 1, 0], view)
-      mat4.perspective(Math.PI / 4, aspect, span * 0.01, span * 20, projection)
+      mat4.perspective(verticalFov, aspect, span * 0.005, distance + span * 2, projection)
       // Borrowed matrix, reused on the next update.
       return mat4.multiply(projection, view, viewProjection)
     },

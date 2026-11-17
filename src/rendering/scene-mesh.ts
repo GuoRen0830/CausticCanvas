@@ -1,73 +1,84 @@
-import { vec3 } from 'wgpu-matrix'
 import type { ReceiverPlane } from '../contracts'
 
-type Triple = readonly [number, number, number]
-
-export interface SceneBox {
-  // Lens-local coordinates and full dimensions, in meters.
-  center: Triple
-  size: Triple
-}
-
 // Vertex layout: position(3), normal(3), albedo(3), floor flag, object ID.
+// A model uses IDs >= 2. The scene reserves ID 1 for the receiver floor.
 export interface SceneMesh {
   vertices: Float32Array<ArrayBuffer>
   indices: Uint32Array<ArrayBuffer>
+  // UVs are a separate render-only stream. BVH triangles use the original layout.
+  uvs?: Float32Array<ArrayBuffer>
+  draws?: SceneDraw[]
+}
+
+export interface SceneDraw {
+  firstIndex: number
+  indexCount: number
+  material?: string
+  hasUV?: boolean
+}
+
+export interface BaseColorMaterial {
+  color: [number, number, number]
+  map?: File
+  uvTransform?: [number, number, number, number] // scale U/V, offset U/V
+  clamp?: boolean
+}
+
+export function sceneAlbedoFormat(materials?: ReadonlyMap<string, BaseColorMaterial>): GPUTextureFormat {
+  return materials?.size ? 'rgba8unorm-srgb' : 'rgba8unorm'
 }
 
 export const sceneVertexStride = 11
 
-export function buildSceneMesh(receiver: ReceiverPlane, box: SceneBox): SceneMesh {
-  const dimensions = [receiver.sizeX, receiver.sizeY, ...box.size]
-  if (dimensions.some((value) => !Number.isFinite(value) || value <= 0)) {
-    throw new Error('Scene dimensions must be finite and positive.')
-  }
-  if (![receiver.z, ...box.center].every(Number.isFinite)) {
-    throw new Error('Scene positions must be finite.')
-  }
+export interface SceneGeometry {
+  mesh: SceneMesh
+  materials?: Map<string, BaseColorMaterial>
+}
 
-  const vertices: number[] = []
-  const indices: number[] = []
+function buildFloorMesh({ sizeX, sizeY, z }: ReceiverPlane): SceneMesh {
+  const x = sizeX / 2, y = sizeY / 2
+  // Counterclockwise as seen from the lens, with floor object ID 1.
+  const vertices = [[-x, y], [x, y], [x, -y], [-x, -y]].flatMap(([px, py]) =>
+    [px, py, z, 0, 0, -1, 0.48, 0.52, 0.58, 1, 1])
+  return { vertices: new Float32Array(vertices), indices: new Uint32Array([0, 1, 2, 0, 2, 3]) }
+}
 
-  const addQuad = (center: Triple, u: Triple, v: Triple, color: Triple, isFloor = false) => {
-    const first = vertices.length / sceneVertexStride
-    const normal = vec3.normalize(vec3.cross(u, v))
-    // u and v are half-edge vectors; u cross v determines the front face.
-    for (const [s, t] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-      vertices.push(
-        center[0] + s * u[0] + t * v[0],
-        center[1] + s * u[1] + t * v[1],
-        center[2] + s * u[2] + t * v[2],
-        normal[0], normal[1], normal[2],
-        ...color, Number(isFloor), isFloor ? 1 : 2,
-      )
+// Assemble once and share the resulting mesh with the design view and both renderers.
+// Custom model positions must already be in lens-local meters.
+export function buildSceneGeometry(receiver: ReceiverPlane, { mesh: model }: { mesh: SceneMesh }): SceneGeometry {
+  const floor = buildFloorMesh(receiver)
+  const vertexCount = model.vertices.length / sceneVertexStride
+  if (!Number.isInteger(vertexCount) || !model.indices.length || model.indices.length % 3 !== 0) {
+    throw new Error('Expected an indexed triangle model.')
+  }
+  for (let start = 0; start < model.vertices.length; start += sceneVertexStride) {
+    const objectId = model.vertices[start + 10]
+    if (model.vertices[start + 9] !== 0 || !Number.isInteger(objectId) || objectId < 2 || objectId > 0xffffff) {
+      throw new Error('Model vertices must be non-floor vertices with object IDs from 2 to 0xffffff.')
     }
-    indices.push(first, first + 1, first + 2, first, first + 2, first + 3)
   }
-
-  // The receiver faces the lens, toward local -Z.
-  addQuad(
-    [0, 0, receiver.z],
-    [receiver.sizeX / 2, 0, 0],
-    [0, -receiver.sizeY / 2, 0],
-    [0.48, 0.52, 0.58],
-    true,
-  )
-
-  const [x, y, z] = box.center
-  const [hx, hy, hz] = box.size.map((value) => value / 2)
-  const color: Triple = [0.85, 0.43, 0.16]
-
-  // Each face owns four vertices so the box keeps sharp normal discontinuities.
-  addQuad([x + hx, y, z], [0, hy, 0], [0, 0, hz], color)
-  addQuad([x - hx, y, z], [0, 0, hz], [0, hy, 0], color)
-  addQuad([x, y + hy, z], [0, 0, hz], [hx, 0, 0], color)
-  addQuad([x, y - hy, z], [hx, 0, 0], [0, 0, hz], color)
-  addQuad([x, y, z + hz], [hx, 0, 0], [0, hy, 0], color)
-  addQuad([x, y, z - hz], [0, hy, 0], [hx, 0, 0], color)
-
-  return {
-    vertices: new Float32Array(vertices),
-    indices: new Uint32Array(indices),
+  const vertices = new Float32Array(floor.vertices.length + model.vertices.length)
+  vertices.set(floor.vertices)
+  vertices.set(model.vertices, floor.vertices.length)
+  const indices = new Uint32Array(floor.indices.length + model.indices.length)
+  indices.set(floor.indices)
+  const offset = floor.vertices.length / sceneVertexStride
+  for (let i = 0; i < model.indices.length; i++) {
+    const index = model.indices[i]
+    if (index >= vertexCount) throw new Error('Model vertex index out of range.')
+    indices[floor.indices.length + i] = offset + index
   }
+  const mesh: SceneMesh = { vertices, indices }
+  if (model.uvs) {
+    if (model.uvs.length !== 2 * vertexCount) throw new Error('Expected one UV pair per model vertex.')
+    mesh.uvs = new Float32Array(2 * offset + model.uvs.length)
+    mesh.uvs.set(model.uvs, 2 * offset)
+  }
+  if (model.draws) {
+    mesh.draws = [
+      { firstIndex: 0, indexCount: floor.indices.length },
+      ...model.draws.map(draw => ({ ...draw, firstIndex: floor.indices.length + draw.firstIndex })),
+    ]
+  }
+  return { mesh }
 }

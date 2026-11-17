@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>OBJ import checks</title>
+<body><pre id="output">Running import checks…</pre>
+<script type="module">
+  import { checkObjMesh } from './obj-mesh-check.ts'
+  import { checkSceneTraining, checkLargeSceneDispatch } from './scene-training.ts'
+  import { checkBaseColor } from './base-color-check.ts'
+  const log = line => { document.querySelector('#output').textContent += '\n' + line }
+  try {
+    await checkObjMesh(log)
+    const device = await (await navigator.gpu.requestAdapter()).requestDevice()
+    try {
+      await checkBaseColor(device, log)
+      await checkSceneTraining(device, log)
+      if (new URLSearchParams(location.search).has('large')) await checkLargeSceneDispatch(device, log)
+    }
+    finally { device.destroy() }
+    log('ALL PASSED')
+  } catch (error) { log(String(error)); console.error(error) }
+</script></body></html>

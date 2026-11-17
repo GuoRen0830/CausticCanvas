@@ -1,0 +1,4 @@
+newmtl color_0
+Kd 1 1 1
+map_Kd textures/base-color-1.webp
+

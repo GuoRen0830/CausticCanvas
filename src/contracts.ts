@@ -48,7 +48,7 @@ export interface TargetImage {
   version: number
 
   // Linear shape weights in [0, 1]; no gamma decoding.
-  // Row-major, with row 0 at the bottom; not absolute irradiance.
+  // Row-major, starting at optical -Y (the top row of the drawing pad).
   values: Float32Array
 }
 
@@ -61,7 +61,7 @@ export interface ReceiverPlane {
   sizeX: number
   sizeY: number
 
-  // Image resolution; row 0 corresponds to the bottom edge.
+  // Image resolution; row 0 corresponds to the optical -Y edge.
   width: number
   height: number
 }
@@ -71,7 +71,7 @@ export type CausticImage = {
   readonly width: number
   readonly height: number
 
-  // Row 0 maps to the receiver's bottom edge.
+  // Row 0 maps to the receiver's optical -Y edge.
 } & (
   | {
       readonly kind: 'buffer'
@@ -131,7 +131,7 @@ export interface ForwardModel {
   // Record the vector-Jacobian product of the latest encode for this input:
   // heightGradient[v] = sum_j pixelGradient[j] * dE[j] / dh[v].
   // pixelGradient: borrowed STORAGE row-major f32 dL/dE per receiver pixel,
-  // row 0 at the bottom, in loss units per (W/m^2).
+  // starting at optical -Y, in loss units per (W/m^2).
   // heightGradient: borrowed STORAGE row-major f32 dL/dh per lens vertex,
   // in loss units per meter. Overwrite every entry; never accumulate.
   // Pass the exact result of that encode, before its outputs or heights are reused.

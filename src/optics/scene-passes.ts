@@ -1,5 +1,6 @@
 import type { DesignView } from './design-view'
 import opticsShader from './optics.wgsl?raw'
+import hitTypes from '../rendering/shaders/scene-hit.wgsl?raw'
 import bvhShader from '../rendering/shaders/bvh-query.wgsl?raw'
 import sceneShader from './scene-optics.wgsl?raw'
 
@@ -12,7 +13,7 @@ export async function createScenePasses(
   timestamps?: (stage: string) => GPUComputePassTimestampWrites | undefined,
 ) {
   const module = device.createShaderModule({ label: 'Differentiable scene receiver',
-    code: [opticsShader, bvhShader, sceneShader].join('\n') })
+    code: [opticsShader, hitTypes, bvhShader, sceneShader].join('\n') })
   const errors = (await module.getCompilationInfo()).messages.filter(m => m.type === 'error')
   if (errors.length) throw new Error(errors.map(m => `Scene optics line ${m.lineNum}: ${m.message}`).join('\n'))
   const [trace, forward, backward, gather] = await Promise.all(

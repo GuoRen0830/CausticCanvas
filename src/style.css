@@ -109,7 +109,7 @@ h1 {
 #target-canvas,
 #caustic-canvas {
   display: block;
-  width: 100%;
+  width: min(100%, calc(100% * var(--scene-aspect, 1)));
   height: auto;
   background: #000;
   box-shadow: 0 0 0 1px #303744;
@@ -124,12 +124,42 @@ h1 {
   margin-top: 24px;
 }
 
-#clear-target {
-  margin-top: 16px;
+#bundled-scene {
+  width: 100%;
+  margin: 6px 0 10px;
+}
+
+.scene-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#scene-credit:not([hidden]) {
+  display: inline-block;
+  color: #aab4c2;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+#scene-status {
+  overflow-wrap: anywhere;
+}
+
+#design-panel button {
   padding: 8px 16px;
   color: inherit;
   background: #252d39;
   border: 1px solid #465064;
   border-radius: 6px;
   cursor: pointer;
+}
+
+#design-panel button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+#clear-target {
+  margin-top: 16px;
 }

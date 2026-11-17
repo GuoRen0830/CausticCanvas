@@ -4,6 +4,10 @@ struct SceneUniforms {
 
 @group(0) @binding(0)
 var<uniform> sceneUniforms: SceneUniforms;
+struct Material { color: vec4f, uvTransform: vec4f }
+@group(1) @binding(0) var<uniform> material: Material;
+@group(1) @binding(1) var baseColorMap: texture_2d<f32>;
+@group(1) @binding(2) var baseColorSampler: sampler;
 
 struct VertexInput {
   @location(0) position: vec3<f32>,
@@ -11,6 +15,7 @@ struct VertexInput {
   @location(2) color: vec3<f32>,
   @location(3) isFloor: f32,
   @location(4) objectId: f32,
+  @location(5) uv: vec2f,
 }
 
 struct VertexOutput {
@@ -20,6 +25,7 @@ struct VertexOutput {
   @location(2) @interpolate(flat) isFloor: f32,
   @location(3) @interpolate(flat) objectId: u32,
   @location(4) localPosition: vec3f,
+  @location(5) uv: vec2f,
 }
 
 @vertex
@@ -31,6 +37,8 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
   output.isFloor = input.isFloor;
   output.objectId = u32(input.objectId);
   output.localPosition = input.position;
+  let uv = input.uv * material.uvTransform.xy + material.uvTransform.zw;
+  output.uv = vec2f(uv.x, 1.0 - uv.y);
   return output;
 }
 
@@ -46,7 +54,8 @@ fn fragmentMain(input: VertexOutput) -> GBuffer {
   // Keep this geometric normal independent of interpolated shading normals.
   let geometric = normalize(cross(dpdy(input.localPosition), dpdx(input.localPosition)));
   return GBuffer(
-    vec4<f32>(input.color, 1.0),
+    vec4f(mix(input.color, material.color.rgb, material.color.a) *
+      textureSample(baseColorMap, baseColorSampler, input.uv).rgb, 1.0),
     // Signed unit normals encoded in UNORM8; zero is exactly byte 128.
     vec4<f32>((normalize(input.localNormal) * 127.0 + 128.0) / 255.0, input.isFloor),
     vec2u(input.objectId, pack4x8snorm(vec4f(geometric, 0))),
