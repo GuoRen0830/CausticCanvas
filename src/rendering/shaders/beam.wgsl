@@ -59,6 +59,49 @@ fn fullscreenVS(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
 
 override materialLighting: bool = false;
 override encodeCanvas: bool = false;
+
+// Near-white lamp in a dark room; a faint neutral fill keeps the model readable.
+const lampColor = vec3f(1.0, 0.97, 0.92);
+const fillSky = vec3f(0.08);
+const fillGround = vec3f(0.025);
+
+fn decodeNormal(pixel: vec2i) -> vec3f {
+  return textureLoad(normalAndFloor, pixel, 0).xyz * (255.0 / 127.0) - 128.0 / 127.0;
+}
+
+fn insideTarget(pixel: vec2i) -> bool {
+  return all(pixel >= vec2i(0)) && all(pixel < vec2i(frame.targetSize));
+}
+
+// Footprints smaller than a screen pixel leave sparkle on surfaces. Average a
+// 5 x 5 neighbourhood, but only across texels that face the same way.
+fn smoothedIrradiance(pixel: vec2i, n: vec3f) -> f32 {
+  var sum = 0.0;
+  var weights = 0.0;
+  for (var y = -2; y <= 2; y++) {
+    for (var x = -2; x <= 2; x++) {
+      let q = pixel + vec2i(x, y);
+      if (!insideTarget(q) || textureLoad(albedo, q, 0).a < 0.5) { continue; }
+      let facing = max(dot(decodeNormal(q), n), 0.0);
+      let w = exp(-0.25 * f32(x * x + y * y)) * facing * facing * facing * facing;
+      sum += w * textureLoad(lighting, q, 0).r;
+      weights += w;
+    }
+  }
+  return select(textureLoad(lighting, pixel, 0).r, sum / weights, weights > 0.0);
+}
+
+// Filmic curve (Narkowicz ACES fit): bright light rolls off instead of clipping.
+fn filmic(x: vec3f) -> vec3f {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0), vec3f(1));
+}
+
+fn present(linear: vec3f) -> vec4f {
+  if (!encodeCanvas) { return vec4f(linear, 1); }
+  let srgb = select(12.92 * linear, 1.055 * pow(linear, vec3f(1.0 / 2.4)) - 0.055, linear > vec3f(0.0031308));
+  return vec4f(srgb, 1);
+}
+
 @fragment
 fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let pixel = vec2i(frag.xy);
@@ -78,15 +121,21 @@ fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     return vec4f(color, 1);
   }
   if (frame.mode == 2u) { return displayColor(light.r, frame.exposure); }
-  let base = textureLoad(albedo, pixel, 0).rgb;
-  if (materialLighting) {
-    let linear = base * (light.r / 3.14159265);
-    if (encodeCanvas) {
-      let srgb = select(12.92 * linear, 1.055 * pow(linear, vec3f(1.0 / 2.4)) - 0.055, linear > vec3f(0.0031308));
-      return vec4f(srgb, 1);
-    }
-    return vec4f(linear, 1);
+
+  let uv = frag.xy / frame.targetSize;
+
+  let surface = textureLoad(albedo, pixel, 0);
+  if (surface.a < 0.5) {
+    // Dark neutral backdrop, slightly lighter at the top, so the light stands out.
+    return present(mix(vec3f(0.018), vec3f(0.004), uv.y));
   }
-  let beamDiffuse = vec3f(1.0, 0.78, 0.38) * (light.r / 3.14159265);
-  return vec4f(base * beamDiffuse, 1);
+
+  var base = surface.rgb;
+  if (!materialLighting) { base *= vec3f(1.0, 0.78, 0.38); }
+  let n = decodeNormal(pixel);
+  // The lamp shines along +Z, so surfaces facing -Z look up towards it.
+  let fill = mix(fillGround, fillSky, 0.5 - 0.5 * n.z);
+  let irradiance = smoothedIrradiance(pixel, n);
+  let radiance = base * (fill + lampColor * (frame.exposure * irradiance / 3.14159265));
+  return present(filmic(0.9 * radiance));
 }

@@ -6,6 +6,7 @@ export function createDrawingPad(
   size: Pick<TargetImage, 'width' | 'height'>,
   onChange: (target: TargetImage) => void,
   view?: DesignView,
+  onHistory?: (canUndo: boolean) => void,
 ) {
   const { width, height } = size
   if (
@@ -39,21 +40,31 @@ export function createDrawingPad(
     for (let i = 0; i < width * height; i++) {
       // Use the visible depth range so a low-profile OBJ is legible against the floor.
       const relief = far > near ? (far - depths[2*i+1]) / (far - near) : 0
-      const shade = view.surfaceAreas[i] > 0 ? 22 + 60 * relief : 2
+      // Light grey relief on paper; taller surfaces are darker.
+      const shade = view.surfaceAreas[i] > 0 ? 226 - 70 * relief : 247
       image.data.set([shade, shade, shade, 255], 4 * i)
     }
     ctx.putImageData(image, 0, 0)
     canvas.style.backgroundImage = `url(${guide.toDataURL()})`
     canvas.style.backgroundSize = '100% 100%'
   }
-  context.strokeStyle = '#fff'
-  context.fillStyle = '#fff'
+  // Only the alpha channel becomes the target; the colour is for the eye.
+  context.strokeStyle = '#1d1d1f'
+  context.fillStyle = '#1d1d1f'
   // Keep brush size proportional when the image resolution changes.
   context.lineWidth = Math.min(width, height) * 0.05
   context.lineCap = 'round'
   context.lineJoin = 'round'
 
   let version = 0
+  // Snapshots taken before each stroke or clear, newest last.
+  const history: ImageData[] = []
+  const historyLimit = 30
+  const remember = () => {
+    history.push(context.getImageData(0, 0, canvas.width, canvas.height))
+    if (history.length > historyLimit) history.shift()
+    onHistory?.(true)
+  }
   let activePointer: number | null = null
   let previous = { x: 0, y: 0 }
   const events = new AbortController()
@@ -102,6 +113,7 @@ export function createDrawingPad(
     if (activePointer !== null || !event.isPrimary || event.button !== 0) return
     activePointer = event.pointerId
     previous = pointFromEvent(event)
+    remember()
 
     // Keep receiving events when the pointer leaves the canvas.
     canvas.setPointerCapture(event.pointerId)
@@ -133,6 +145,14 @@ export function createDrawingPad(
     publish()
   }
 
+  const undo = () => {
+    const snapshot = history.pop()
+    if (!snapshot || activePointer !== null) return
+    context.putImageData(snapshot, 0, 0)
+    onHistory?.(history.length > 0)
+    publish()
+  }
+
   const options = { signal: events.signal }
   canvas.addEventListener('pointerdown', startStroke, options)
   canvas.addEventListener('pointermove', moveStroke, options)
@@ -140,9 +160,18 @@ export function createDrawingPad(
   canvas.addEventListener('pointercancel', finishStroke, options)
   canvas.addEventListener('lostpointercapture', finishStroke, options)
   clear()
+  onHistory?.(false)
 
   return {
-    clear,
+    clear() {
+      if (activePointer === null) remember()
+      clear()
+    },
+    undo,
+    // Brush diameter as a fraction of the shorter side.
+    setBrush(fraction: number) {
+      if (fraction > 0) context.lineWidth = Math.min(width, height) * fraction
+    },
     destroy() {
       events.abort()
       releasePointer()

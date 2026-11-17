@@ -32,6 +32,11 @@ async function main() {
   const sceneSelect = element('bundled-scene', 'select'), beamSelect = element('beam-view', 'select')
   const credit = element('scene-credit', 'a')
   const cameraHelp = element('camera-help', 'p')
+  const panel = element('design-panel', 'aside'), undoButton = element('undo-target', 'button')
+  const brushSize = element('brush-size', 'input')
+  const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#view-switch button[data-view]'))
+  // Diagnostic views stay available behind ?debug.
+  beamSelect.hidden = !new URLSearchParams(location.search).has('debug')
   for (const [id, preset] of Object.entries(bundledScenes)) sceneSelect.add(new Option(preset.name, id))
   sceneSelect.value = defaultScene
   const events = { signal: lifetime.signal }
@@ -44,6 +49,7 @@ async function main() {
   let pad: ReturnType<typeof createDrawingPad> | undefined
   let camera: ReturnType<typeof createOrbitCamera> | undefined
   let hasTarget = false, optimizationDone = false, switching = false
+  let runStarted = 0, runTimer: number | undefined
   let activeLabel = '', activePreset: BundledScene | undefined
 
   lifetime.signal.addEventListener('abort', () => {
@@ -78,19 +84,32 @@ async function main() {
   let sceneFraming = defaultFraming, lensFraming = defaultFraming, currentFraming = defaultFraming
   camera = createOrbitCamera(canvas, defaultFraming, () => frameLoop?.requestFrame())
 
+  const seconds = () => Math.round((performance.now() - runStarted) / 1000)
   function updateRunState() {
-    frameLoop?.setRunning(!!active?.canOptimize && hasTarget && !optimizationDone)
+    const running = !!active?.canOptimize && hasTarget && !optimizationDone
+    frameLoop?.setRunning(running)
+    panel.classList.toggle('is-working', running)
+    if (running && runTimer === undefined) {
+      runStarted = performance.now()
+      runTimer = window.setInterval(() => { causticStatus.textContent = `Shaping the glass · ${seconds()} s` }, 1000)
+    } else if (!running && runTimer !== undefined) {
+      window.clearInterval(runTimer)
+      runTimer = undefined
+    }
     if (!active?.canOptimize) {
-      causticStatus.textContent = active?.state.optics.incidentIrradiance === 0 ? 'Source is off.' : 'Forward preview only.'
+      causticStatus.textContent = active?.state.optics.incidentIrradiance === 0 ? 'The lamp is off' : 'Preview only'
+    } else if (!hasTarget) {
+      causticStatus.textContent = 'Plain glass'
+    } else if (optimizationDone) {
+      causticStatus.textContent = runStarted ? `Done in ${seconds()} s` : 'Done'
     } else {
-      causticStatus.textContent = !hasTarget ? 'Draw a pattern to optimize.'
-        : optimizationDone ? 'Optimization complete.' : 'Optimizing.'
+      causticStatus.textContent = `Shaping the glass · ${seconds()} s`
     }
   }
 
   const viewHelp: Record<BeamView, string> = {
-    lit: 'Drag to orbit · Scroll to zoom · Double-click to reset',
-    lens: 'Inspect the lens surface · Drag to orbit · Scroll to zoom',
+    lit: 'Drag to look around · Scroll to zoom · Double-click to reset',
+    lens: 'The glass surface that makes the pattern · Drag to look around',
     candidates: 'Candidate count · Blue 1 · Cyan 2 · Green 4 · Yellow 16 · Red 64+',
     footprint: 'Visible floor irradiance after scene occlusion',
     plane: 'Irradiance these beams would produce on the unobstructed reference plane',
@@ -104,10 +123,19 @@ async function main() {
       currentFraming = framing
     }
     cameraHelp.textContent = viewHelp[mode]
+    for (const button of viewButtons) button.setAttribute('aria-pressed', String(button.dataset.view === mode))
     frameLoop?.requestFrame()
   }
   beamSelect.addEventListener('change', changeView, events)
+  for (const button of viewButtons) {
+    button.addEventListener('click', () => {
+      beamSelect.value = button.dataset.view!
+      changeView()
+    }, events)
+  }
   clearButton.addEventListener('click', () => pad?.clear(), events)
+  undoButton.addEventListener('click', () => pad?.undo(), events)
+  brushSize.addEventListener('input', () => pad?.setBrush(Number(brushSize.value)), events)
   window.addEventListener('resize', () => frameLoop?.requestFrame(), events)
 
   function drawSceneFrame(scene: SceneSession, steps: number, mode: BeamView) {
@@ -120,8 +148,11 @@ async function main() {
       canvas.height = height
     }
     const encoder = device.createCommandEncoder()
+    const viewProjection = camera!.update(width / height)
+    const covered = canvas.clientWidth > 760 ? panel.getBoundingClientRect().right : 0
+    if (covered > 0) mat4.multiply(mat4.translation([covered / canvas.clientWidth, 0, 0]), viewProjection, viewProjection)
     const done = scene.render(encoder, context.getCurrentTexture(), previewContext!.getCurrentTexture(),
-      camera!.update(width / height), mode, steps)
+      viewProjection, mode, steps)
     return { done, commands: encoder.finish() }
   }
 
@@ -185,10 +216,12 @@ async function main() {
         next.state.target = target
         optimizationDone = false
         hasTarget = target.values.some(value => value > 0)
-        targetStatus.textContent = hasTarget ? 'Target updated' : 'Draw a pattern to begin.'
+        targetStatus.textContent = hasTarget ? '' : 'Try a word, a shape, or a single line.'
+        if (runTimer !== undefined) runStarted = performance.now()
         updateRunState()
         frameLoop?.requestFrame()
-      }, designView)
+      }, designView, canUndo => { undoButton.disabled = !canUndo })
+      newPad.setBrush(Number(brushSize.value))
       pad?.destroy()
       active?.destroy()
       pad = newPad
@@ -208,13 +241,15 @@ async function main() {
       if (activePreset) {
         const { author, credit: link } = bundledScenes[activePreset]
         credit.href = link
-        credit.textContent = author + ' · CC BY 4.0'
+        credit.textContent = `Model by ${author} · CC BY 4.0`
       }
+      // The model credit lives in the scene picker's tooltip.
+      sceneSelect.title = activePreset ? credit.textContent : ''
       beamSelect.value = 'lit'
       changeView()
       activeLabel = name
-      sceneStatus.textContent = [name, ...warnings].join(' ')
-      status.textContent = 'WebGPU ready'
+      sceneStatus.textContent = [...warnings].join(' ')
+      status.textContent = ''
     } catch (error) {
       if (events.signal.aborted) return
       const reason = error instanceof Error ? error.message : String(error)

@@ -8,64 +8,79 @@
 
   <body>
     <div id="app">
-      <header>
+      <section id="viewport">
+        <canvas
+          id="gpu-canvas"
+          aria-label="Interactive scene preview"
+          aria-describedby="camera-help"
+        ></canvas>
+      </section>
+
+      <header id="topbar">
         <h1>Caustic Canvas</h1>
-        <p id="status">Initializing WebGPU…</p>
+        <div class="scene-picker">
+          <select id="bundled-scene" aria-label="Scene" disabled>
+            <option value="" hidden>Choose a scene</option>
+          </select>
+          <button id="import-obj" class="quiet" type="button" title="Open an OBJ with its MTL and textures" disabled>Open OBJ</button>
+          <input id="obj-file" type="file" accept=".obj,.mtl,.png,.jpg,.jpeg,.webp" multiple hidden />
+          <button id="import-folder" class="quiet" type="button" title="Open a folder with the OBJ, MTL and Base Color images" disabled>Open folder</button>
+          <input id="asset-folder" type="file" webkitdirectory multiple hidden />
+        </div>
       </header>
 
-      <main id="workspace">
-        <aside id="design-panel">
-          <label for="bundled-scene">Scene</label>
-          <select id="bundled-scene" disabled>
-            <option value="" hidden>Select a scene</option>
-          </select>
-          <div class="scene-actions">
-            <button id="import-obj" type="button" disabled>Import OBJ</button>
-            <input id="obj-file" type="file" accept=".obj,.mtl,.png,.jpg,.jpeg,.webp" multiple hidden />
-            <button id="import-folder" type="button" title="Select a folder containing the OBJ, MTL and Base Color images" disabled>Import folder</button>
-            <input id="asset-folder" type="file" webkitdirectory multiple hidden />
-          </div>
-          <p id="scene-status" role="status">Loading Greer Park Skating Bowl…</p>
-          <a id="scene-credit" target="_blank" rel="noopener" hidden></a>
-          <h2>Design the light</h2>
-          <p>Paint on the scene as seen from the light.</p>
+      <aside id="design-panel">
+        <div class="panel-head">
+          <h2>Draw the light</h2>
+          <p class="hint">Paint where the light should land. The view is from the lamp, looking down.</p>
+        </div>
 
-          <canvas id="target-canvas" aria-label="Light pattern drawing pad"></canvas>
+        <canvas id="target-canvas" aria-label="Light pattern drawing pad"></canvas>
 
-          <button id="clear-target" type="button">Clear</button>
-          <p id="target-status">Draw a pattern to begin.</p>
+        <div class="tools">
+          <label class="brush" title="Brush size">
+            <span>Brush</span>
+            <input id="brush-size" type="range" min="0.02" max="0.12" step="0.005" value="0.05" />
+          </label>
+          <button id="undo-target" class="quiet" type="button" disabled>Undo</button>
+          <button id="clear-target" class="quiet" type="button">Clear</button>
+        </div>
+        <p id="target-status" class="hint"></p>
 
-          <section id="caustic-panel">
-            <h2>Light-view irradiance</h2>
-            <canvas
-              id="caustic-canvas"
-              aria-label="Scene irradiance from the fixed light view"
-            ></canvas>
-            <p id="caustic-status">Waiting for solver output.</p>
-          </section>
-        </aside>
+        <div id="progress" aria-hidden="true"><span></span></div>
 
-        <section id="viewport">
-          <div id="beam-control">
-            <label>View
-              <select id="beam-view">
-                <option value="lit">Lit scene</option>
-                <option value="lens">Lens shape</option>
-                <option value="candidates">Candidate pixels</option>
-                <option value="footprint">Floor footprint</option>
-                <option value="plane">Unobstructed plane</option>
-                <option value="difference">Scene vs. plane difference</option>
-              </select>
-            </label>
+        <section id="caustic-panel">
+          <div class="result-head">
+            <h3>Result</h3>
+            <p id="caustic-status" role="status"></p>
           </div>
           <canvas
-            id="gpu-canvas"
-            aria-label="Interactive scene preview"
-            aria-describedby="camera-help"
+            id="caustic-canvas"
+            aria-label="Light reaching the scene, seen from the lamp"
           ></canvas>
-          <p id="camera-help">Drag to orbit · Scroll to zoom · Double-click to reset</p>
         </section>
-      </main>
+      </aside>
+
+      <div id="view-switch" role="group" aria-label="View">
+        <button type="button" data-view="lit" aria-pressed="true">Room</button>
+        <button type="button" data-view="lens" aria-pressed="false">Glass</button>
+        <select id="beam-view" aria-label="Debug view" hidden>
+          <option value="lit">Lit scene</option>
+          <option value="lens">Lens shape</option>
+          <option value="candidates">Candidate pixels</option>
+          <option value="footprint">Floor footprint</option>
+          <option value="plane">Unobstructed plane</option>
+          <option value="difference">Scene vs. plane difference</option>
+        </select>
+      </div>
+
+      <footer id="footnote">
+        <p id="camera-help">Drag to look around · Scroll to zoom · Double-click to reset</p>
+        <p id="scene-status" role="status"></p>
+        <a id="scene-credit" target="_blank" rel="noopener" hidden></a>
+      </footer>
+
+      <p id="status" role="alert"></p>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

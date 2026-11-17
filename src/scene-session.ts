@@ -80,6 +80,9 @@ export async function createSceneSession(
       const power = state.optics.incidentIrradiance * state.lens.sizeX * state.lens.sizeY
       const drawing = config.rendering.drawingExposure > 0 && paintedArea > 0 && power > 0
       display!.setExposure(drawing ? config.rendering.drawingExposure * paintedArea / power : config.rendering.causticExposure)
+      // In the room, keep the brightest strokes just below white so the
+      // surface under the light still shows; plain glass stays at 1.
+      beams!.setExposure(drawing ? Math.min(1, config.rendering.roomExposure * paintedArea / power) : 1)
     }
 
     return {

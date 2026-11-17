@@ -20,8 +20,9 @@ const clear = (view: GPUTextureView): GPURenderPassColorAttachment => ({
 
 export function createBeamRenderer(
   device: GPUDevice, canvasFormat: GPUTextureFormat,
-  opticalToWorld: Mat4, exposure: number, { mesh, materials }: SceneGeometry,
+  opticalToWorld: Mat4, initialExposure: number, { mesh, materials }: SceneGeometry,
 ) {
+  let exposure = initialExposure
   const data = new Float32Array(48)
   const words = new Uint32Array(data.buffer)
   const localVP = data.subarray(0, 16)
@@ -64,6 +65,7 @@ export function createBeamRenderer(
     primitive: { topology: 'triangle-strip' },
   })
   const compositeLayout = frameLayout([
+    { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
     { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
     { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
   ])
@@ -96,7 +98,7 @@ export function createBeamRenderer(
     ] })
     const compositeGroup = device.createBindGroup({
       layout: composite.getBindGroupLayout(0),
-      entries: [uniformEntry, { binding: 3, resource: albedoView }, { binding: 4, resource: lightView }],
+      entries: [uniformEntry, normalEntry, { binding: 3, resource: albedoView }, { binding: 4, resource: lightView }],
     })
     return {
       width, height, albedoView, normalView, depthView, lightView, objectView, splatGroup, compositeGroup,
@@ -200,6 +202,11 @@ export function createBeamRenderer(
   let boundField: { heights: GPUBuffer; beams: GPUBuffer; group: GPUBindGroup } | undefined
 
   return {
+    // Scales the lamp light in the lit view and the footprint view.
+    setExposure(value: number) {
+      exposure = value
+    },
+
     render(
       encoder: GPUCommandEncoder, output: GPUTexture, viewProjection: Mat4,
       mode: BeamView, result: ForwardResult,
@@ -209,7 +216,7 @@ export function createBeamRenderer(
       if (mode === 'lens') {
         const targets = screenFor(output)
         const pass = encoder.beginRenderPass({
-          label: 'Inspect lens shape', colorAttachments: [{ view: output.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
+          label: 'Inspect lens shape', colorAttachments: [{ view: output.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0.07, 0.07, 0.075, 1] }],
           depthStencilAttachment: { view: targets.depthView, depthLoadOp: 'clear', depthClearValue: 1, depthStoreOp: 'discard' },
         })
         drawLens(pass)

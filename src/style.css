@@ -1,46 +1,52 @@
+:root {
+  --ink: #1d1d1f;
+  --ink-soft: #55555a;
+  --ink-faint: #8c8c91;
+  --page: #0b0b0c;
+  --on-scene: rgba(255, 255, 255, 0.92);
+  --on-scene-soft: rgba(255, 255, 255, 0.6);
+  --panel: #ffffff;
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.16);
+  --hover: rgba(0, 0, 0, 0.05);
+  --radius: 12px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+}
+
 * {
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  font-family: system-ui, sans-serif;
-  color: #e8edf2;
-  background: #10131a;
+  font: 14px/1.45 var(--font);
+  color: var(--ink);
+  background: var(--page);
+  -webkit-font-smoothing: antialiased;
 }
 
 #app {
-  height: 100dvh;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-
-header {
-  padding: 16px 24px;
-  border-bottom: 1px solid #303744;
-}
-
-h1 {
-  margin: 0;
-  font-size: 22px;
-}
-
-#status {
-  margin: 8px 0 0;
-  font-size: 14px;
-}
-
-#viewport {
   position: relative;
-  min-width: 0;
-  min-height: 0;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* The scene fills the window; everything else floats above it. */
+#viewport {
+  position: absolute;
+  inset: 0;
 }
 
 #gpu-canvas {
-  background: #000;
   display: block;
   width: 100%;
   height: 100%;
+  background: var(--page);
   touch-action: none;
   cursor: grab;
 }
@@ -49,61 +55,139 @@ h1 {
   cursor: grabbing;
 }
 
-#beam-control {
+#topbar {
   position: absolute;
-  top: 12px;
-  left: 16px;
+  top: 0;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  max-width: calc(100% - 32px);
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: 4px;
-  background: #10131a;
-  font-size: 13px;
-}
-
-#beam-control select {
-  color: inherit;
-  background: #252d39;
-  border: 1px solid #465064;
-  border-radius: 3px;
-  font: inherit;
-}
-
-#camera-help {
-  position: absolute;
-  left: 16px;
-  bottom: 16px;
-  right: 16px;
-  margin: 0;
-  color: #c4d5dc;
-  font-size: 13px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
   pointer-events: none;
-  user-select: none;
 }
 
-#workspace {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  min-height: 0;
+#topbar > * {
+  pointer-events: auto;
+}
+
+h1 {
+  margin: 0;
+  color: var(--on-scene);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.scene-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+select,
+button {
+  font: inherit;
+  color: var(--ink);
+}
+
+#bundled-scene {
+  appearance: none;
+  min-width: 200px;
+  padding: 6px 30px 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2355555a' stroke-width='1.4'/%3E%3C/svg%3E") no-repeat right 12px center;
+  cursor: pointer;
+}
+
+button {
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+button:hover:not(:disabled) {
+  background: #f4f4f3;
+}
+
+#topbar button.quiet {
+  color: var(--on-scene-soft);
+}
+
+#topbar button.quiet:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--on-scene);
+}
+
+button:disabled,
+select:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+button.quiet:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid #0a64d8;
+  outline-offset: 2px;
 }
 
 #design-panel {
-  padding: 20px;
-  overflow: auto;
-  border-right: 1px solid #303744;
+  position: absolute;
+  top: 64px;
+  left: 24px;
+  bottom: 24px;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+  scrollbar-width: thin;
 }
 
-#design-panel h2 {
-  margin: 0 0 12px;
-  font-size: 18px;
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
 }
 
-#design-panel p {
-  color: #aab4c2;
-  font-size: 14px;
+h2 {
+  font-size: 15px;
+}
+
+h3 {
+  font-size: 13px;
+}
+
+.hint {
+  margin: 4px 0 0;
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+.hint:empty {
+  display: none;
 }
 
 #target-canvas,
@@ -111,55 +195,208 @@ h1 {
   display: block;
   width: min(100%, calc(100% * var(--scene-aspect, 1)));
   height: auto;
-  background: #000;
-  box-shadow: 0 0 0 1px #303744;
+  margin: 0 auto;
+  border-radius: 8px;
 }
 
 #target-canvas {
+  background: #f7f7f6;
   touch-action: none;
   cursor: crosshair;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+#caustic-canvas {
+  background: #000;
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tools button {
+  padding: 5px 10px;
+}
+
+.brush {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.brush input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--ink);
+}
+
+/* Thin indeterminate bar while the glass is being shaped. */
+#progress {
+  position: relative;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+#progress span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 30%;
+  border-radius: 2px;
+  background: var(--ink);
+  animation: travel 1.4s ease-in-out infinite;
+}
+
+#design-panel.is-working #progress {
+  opacity: 1;
+}
+
+@keyframes travel {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
 }
 
 #caustic-panel {
-  margin-top: 24px;
-}
-
-#bundled-scene {
-  width: 100%;
-  margin: 6px 0 10px;
-}
-
-.scene-actions {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  flex-wrap: wrap;
 }
 
-#scene-credit:not([hidden]) {
-  display: inline-block;
-  color: #aab4c2;
+.result-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#caustic-status {
+  margin: 0;
+  color: var(--ink-faint);
   font-size: 12px;
-  margin-bottom: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
-#scene-status {
-  overflow-wrap: anywhere;
+#view-switch {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
 }
 
-#design-panel button {
-  padding: 8px 16px;
-  color: inherit;
-  background: #252d39;
-  border: 1px solid #465064;
-  border-radius: 6px;
-  cursor: pointer;
+#view-switch button {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-soft);
 }
 
-#design-panel button:disabled {
-  opacity: 0.55;
-  cursor: default;
+#view-switch button[aria-pressed='true'] {
+  background: var(--ink);
+  color: #fff;
 }
 
-#clear-target {
-  margin-top: 16px;
+#view-switch select {
+  margin-left: 4px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+}
+
+#footnote {
+  position: absolute;
+  left: 348px;
+  right: 220px;
+  bottom: 28px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 18px;
+  color: var(--on-scene-soft);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+#footnote p {
+  margin: 0;
+}
+
+#scene-status:empty {
+  display: none;
+}
+
+/* Kept in the DOM for main.ts, but not shown. */
+#camera-help,
+#scene-credit {
+  display: none !important;
+}
+
+#scene-credit {
+  color: var(--on-scene-soft);
+  pointer-events: auto;
+}
+
+#status {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  max-width: min(520px, calc(100% - 48px));
+  margin: 0;
+  padding: 10px 16px;
+  transform: translateX(-50%);
+  border: 1px solid #f0c4bb;
+  border-radius: 10px;
+  background: #fff4f1;
+  color: #9b2c17;
+}
+
+#status:empty {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  #topbar {
+    flex-wrap: wrap;
+    padding: 14px 16px;
+  }
+
+  #design-panel {
+    top: auto;
+    left: 16px;
+    right: 16px;
+    bottom: 72px;
+    width: auto;
+    max-height: 48dvh;
+  }
+
+  #view-switch {
+    right: 16px;
+    bottom: 16px;
+  }
+
+  #footnote {
+    left: 16px;
+    right: 160px;
+    bottom: 22px;
+  }
+
+  #camera-help {
+    display: none;
+  }
 }

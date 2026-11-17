@@ -54,13 +54,20 @@ fn fragmentMain(
   // Framebuffer Y points down, so reverse the cross-product order.
   let normal = normalize(cross(tangentY, tangentX));
 
-  // Directional shading for the dedicated lens inspection view.
+  // Glass-like shading for the inspection view: a cool tint that darkens on
+  // steep slopes, plus a highlight from the lamp above. The orbit camera
+  // usually looks down from the front, so a fixed viewing direction is enough.
   let toLight = normalize(vec3<f32>(-0.4, 0.8, 0.6));
-  // Two-sided inspection shading keeps either side readable.
-  let diffuse = abs(dot(normal, toLight));
+  let toViewer = normalize(vec3<f32>(0.5, 0.7, 0.6));
+  let n = select(normal, -normal, dot(normal, toViewer) < 0.0);
+  let diffuse = max(dot(n, toLight), 0.0);
+  let halfway = normalize(toLight + toViewer);
+  let highlight = pow(max(dot(n, halfway), 0.0), 80.0);
+  let rim = pow(1.0 - max(dot(n, toViewer), 0.0), 3.0);
 
-  let baseColor = vec3<f32>(0.2, 0.75, 0.95);
-  let brightness = 0.25 + 0.75 * diffuse;
-
-  return vec4<f32>(baseColor * brightness, 1.0);
+  let deep = vec3<f32>(0.10, 0.13, 0.14);
+  let pale = vec3<f32>(0.62, 0.72, 0.74);
+  let color = mix(deep, pale, diffuse * diffuse) + 0.25 * rim * pale
+    + vec3<f32>(1.0) * highlight;
+  return vec4<f32>(min(color, vec3<f32>(1.0)), 1.0);
 }

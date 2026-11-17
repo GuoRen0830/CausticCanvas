@@ -93,5 +93,8 @@ export const config = {
     // fully painted pixel that receives its share of the light (x in x/(1+x)).
     // Exposes for the drawing instead of the unlit scene; 0 keeps causticExposure.
     drawingExposure: 3,
+    // Lamp exposure in the lit 3D view once something is drawn, in the same
+    // units as drawingExposure. Lower keeps more texture inside the light.
+    roomExposure: 6,
   },
 } as const
