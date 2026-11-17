@@ -3,9 +3,11 @@ import type { Mat4 } from 'wgpu-matrix'
 import type { LensState } from '../contracts'
 import { buildLensIndices } from '../geometry/lens-mesh'
 import lensShaderSource from './shaders/lens.wgsl?raw'
+import boundsShader from './shaders/lens-bounds.wgsl?raw'
 
 export interface LensRenderer {
-  update(lens: LensState, viewProjection: Mat4): void
+  update(lens: LensState, viewProjection: Mat4, relief?: number): void
+  prepare(encoder: GPUCommandEncoder): void
   draw(pass: GPURenderPassEncoder): void
   destroy(): void
 }
@@ -29,15 +31,16 @@ function createLensUniforms(
   device: GPUDevice,
   lens: LensState,
   model: Mat4,
+  referenceHeight: number,
 ) {
   // Store MVP, local-to-world, and grid parameters in one uniform block.
   const buffer = device.createBuffer({
     label: 'Lens uniforms',
-    size: 144,
+    size: 160,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
 
-  const data = new ArrayBuffer(144)
+  const data = new ArrayBuffer(160)
   const mvp = new Float32Array(data, 0, 16)
   new Float32Array(data, 64, 16).set(model)
   const parameters = new DataView(data)
@@ -47,8 +50,10 @@ function createLensUniforms(
   parameters.setUint32(132, lens.rows, true)
   parameters.setFloat32(136, lens.sizeX, true)
   parameters.setFloat32(140, lens.sizeY, true)
+  parameters.setFloat32(148, referenceHeight, true)
 
-  const update = (viewProjection: Mat4) => {
+  const update = (viewProjection: Mat4, relief: number) => {
+    parameters.setFloat32(144, relief, true)
     mat4.multiply(viewProjection, model, mvp)
     device.queue.writeBuffer(buffer, 0, data)
   }
@@ -96,13 +101,23 @@ export function createLensRenderer(
   format: GPUTextureFormat,
   initialLens: LensState,
   model: Mat4,
+  referenceHeight = 0,
 ): LensRenderer {
   const { columns, rows, sizeX, sizeY } = initialLens
   const indices = createLensIndexBuffer(device, initialLens)
-  const uniforms = createLensUniforms(device, initialLens, model)
+  const uniforms = createLensUniforms(device, initialLens, model, referenceHeight)
   const pipeline = createLensPipeline(device, format)
   const layout = pipeline.getBindGroupLayout(0)
   const bindings = new WeakMap<GPUBuffer, GPUBindGroup>()
+  const scans = new WeakMap<GPUBuffer, GPUBindGroup>()
+  const partials = device.createBuffer({ label: 'Lens preview partial bounds', size: 256 * 8, usage: GPUBufferUsage.STORAGE })
+  const bounds = device.createBuffer({ label: 'Lens preview bounds', size: 8, usage: GPUBufferUsage.STORAGE })
+  const boundsModule = device.createShaderModule({ label: 'Lens preview framing', code: boundsShader })
+  const scan = device.createComputePipeline({ layout: 'auto', compute: { module: boundsModule, entryPoint: 'scan' } })
+  const finish = device.createComputePipeline({ layout: 'auto', compute: { module: boundsModule, entryPoint: 'finish' } })
+  const finishGroup = device.createBindGroup({ layout: finish.getBindGroupLayout(0), entries: [
+    { binding: 1, resource: { buffer: partials } }, { binding: 2, resource: { buffer: bounds } },
+  ] })
 
   const bindingsFor = (heightBuffer: GPUBuffer) => {
     let group = bindings.get(heightBuffer)
@@ -121,18 +136,25 @@ export function createLensRenderer(
             binding: 1,
             resource: { buffer: heightBuffer, size: columns * rows * 4 },
           },
+          { binding: 2, resource: { buffer: bounds } },
         ],
       })
       bindings.set(heightBuffer, group)
+      scans.set(heightBuffer, device.createBindGroup({ layout: scan.getBindGroupLayout(0), entries: [
+        { binding: 0, resource: { buffer: heightBuffer, size: columns * rows * 4 } },
+        { binding: 1, resource: { buffer: partials } },
+      ] }))
     }
 
     return group
   }
 
   let bindGroup = bindingsFor(initialLens.heightBuffer)
+  let scanGroup = scans.get(initialLens.heightBuffer)!
 
   return {
-    update(lens, viewProjection) {
+    update(lens, viewProjection, relief = 1) {
+      if (!Number.isFinite(relief) || relief < 1) throw new Error('Lens preview relief must be at least 1.')
       if (
         lens.columns !== columns ||
         lens.rows !== rows ||
@@ -144,7 +166,19 @@ export function createLensRenderer(
 
       // Bind the current GPU resource without reading back its contents.
       bindGroup = bindingsFor(lens.heightBuffer)
-      uniforms.update(viewProjection)
+      scanGroup = scans.get(lens.heightBuffer)!
+      uniforms.update(viewProjection, relief)
+    },
+
+    prepare(encoder) {
+      const pass = encoder.beginComputePass({ label: 'Fit lens preview' })
+      pass.setPipeline(scan)
+      pass.setBindGroup(0, scanGroup)
+      pass.dispatchWorkgroups(256)
+      pass.setPipeline(finish)
+      pass.setBindGroup(0, finishGroup)
+      pass.dispatchWorkgroups(1)
+      pass.end()
     },
 
     draw(pass) {
@@ -159,6 +193,8 @@ export function createLensRenderer(
       // Shared heights remain owned by the producer.
       indices.buffer.destroy()
       uniforms.buffer.destroy()
+      partials.destroy()
+      bounds.destroy()
     },
   }
 }

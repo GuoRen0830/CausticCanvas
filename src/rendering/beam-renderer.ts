@@ -1,18 +1,15 @@
-import { workgroupGrid } from '../gpu/dispatch'
 import { mat4 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
-import type { CausticImage, ForwardResult } from '../contracts'
+import type { ForwardResult } from '../contracts'
 import { sceneAlbedoFormat, type SceneGeometry } from './scene-mesh'
 import commonShader from './shaders/beam-common.wgsl?raw'
 import coverageShader from './shaders/pixel-coverage.wgsl?raw'
 import hitTypes from './shaders/scene-hit.wgsl?raw'
 import splatShader from './shaders/hit-splat.wgsl?raw'
 import beamShader from './shaders/beam.wgsl?raw'
-import receiverShader from './shaders/receiver-compare.wgsl?raw'
-import displayColor from './shaders/irradiance-display.wgsl?raw'
 
-export type BeamView = 'lit' | 'candidates' | 'footprint' | 'plane' | 'difference' | 'lens'
-const modeId = { lit: 0, candidates: 1, footprint: 2, plane: 3, difference: 4 }
+export type BeamView = 'lit' | 'candidates' | 'irradiance' | 'normals' | 'albedo' | 'lens'
+const modeId = { lit: 0, candidates: 1, irradiance: 2, normals: 3, albedo: 4 }
 
 const clear = (view: GPUTextureView): GPURenderPassColorAttachment => ({
   view, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0],
@@ -23,7 +20,8 @@ export function createBeamRenderer(
   opticalToWorld: Mat4, initialExposure: number, { mesh, materials }: SceneGeometry,
 ) {
   let exposure = initialExposure
-  const data = new Float32Array(48)
+  let environmentLight = 0, referenceIrradiance = 1
+  const data = new Float32Array(44)
   const words = new Uint32Array(data.buffer)
   const localVP = data.subarray(0, 16)
   const inverseLocalVP = data.subarray(16, 32)
@@ -31,7 +29,7 @@ export function createBeamRenderer(
     label: 'Beam frame', size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   const module = device.createShaderModule({
-    label: 'Beam rendering and plane comparison', code: [displayColor, commonShader, coverageShader, beamShader, receiverShader, hitTypes, splatShader].join('\n'),
+    label: 'Scene beam rendering', code: [commonShader, coverageShader, beamShader, hitTypes, splatShader].join('\n'),
   })
   const fieldLayout = device.createBindGroupLayout({
     entries: [0, 1].map(binding => ({
@@ -106,90 +104,6 @@ export function createBeamRenderer(
     }
   }
 
-  function planeTargets(image: CausticImage) {
-    const { width, height, kind } = image
-    // Blend in f32. Devices without float blending sum positive contributions
-    // with f32 compare/exchange, then copy the bits into the same display texture.
-    const nativeBlend = device.features.has('float32-blendable')
-    const rowWords = Math.ceil(width / 64) * 64 // copyBufferToTexture requires aligned rows.
-    const light = device.createTexture({
-      label: 'Integrated receiver irradiance', format: 'r32float', size: [width, height],
-      usage: GPUTextureUsage.TEXTURE_BINDING | (nativeBlend ? GPUTextureUsage.RENDER_ATTACHMENT : GPUTextureUsage.COPY_DST),
-    })
-    const view = light.createView()
-    const sampled = frameLayout([{ binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } }])
-    const sums = nativeBlend ? null : device.createBuffer({
-      label: 'Receiver f32 sums', size: rowWords * height * 4,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-    })
-    const integrate = nativeBlend
-      ? device.createRenderPipeline({ label: 'Integrate receiver texels', layout: 'auto',
-        vertex: { module, entryPoint: 'boundsVS' },
-        fragment: { module, entryPoint: 'integrateFS', targets: [{ format: 'r32float', blend: { color: add, alpha: add } }] },
-        primitive: { topology: 'triangle-strip' } })
-      : device.createComputePipeline({ label: 'Integrate receiver texels', layout: 'auto', compute: { module, entryPoint: 'integrateCS' } })
-    const frameGroup = device.createBindGroup({ layout: integrate.getBindGroupLayout(0),
-      entries: sums ? [uniformEntry, { binding: 6, resource: { buffer: sums } }] : [uniformEntry] })
-    let planeField: { heights: GPUBuffer; beams: GPUBuffer; group: GPUBindGroup } | undefined
-    let lastResult: ForwardResult | undefined
-    function accumulate(encoder: GPUCommandEncoder, result: ForwardResult, count: number) {
-      // Plane irradiance does not depend on the camera or the comparison view.
-      if (lastResult === result) return
-      const { buffer, lens } = result.beams
-      if (planeField?.heights !== lens.heightBuffer || planeField.beams !== buffer) {
-        planeField = { heights: lens.heightBuffer, beams: buffer,
-          group: device.createBindGroup({ layout: integrate.getBindGroupLayout(1), entries: [
-            { binding: 0, resource: { buffer: lens.heightBuffer } }, { binding: 1, resource: { buffer } },
-          ] }) }
-      }
-      if (sums) {
-        encoder.clearBuffer(sums)
-        const pass = encoder.beginComputePass({ label: 'Receiver pixel integration' })
-        pass.setPipeline(integrate as GPUComputePipeline)
-        pass.setBindGroup(0, frameGroup)
-        pass.setBindGroup(1, planeField.group)
-        const groups = Math.ceil(count / 64)
-        pass.dispatchWorkgroups(...workgroupGrid(groups, device.limits.maxComputeWorkgroupsPerDimension))
-        pass.end()
-        encoder.copyBufferToTexture({ buffer: sums, bytesPerRow: rowWords * 4 }, { texture: light }, [width, height])
-      } else {
-        const pass = encoder.beginRenderPass({ label: 'Receiver pixel integration', colorAttachments: [clear(view)] })
-        pass.setPipeline(integrate as GPURenderPipeline)
-        pass.setBindGroup(0, frameGroup)
-        pass.setBindGroup(1, planeField.group)
-        pass.draw(4, count)
-        pass.end()
-      }
-      lastResult = result
-    }
-    const imageLayout = device.createBindGroupLayout({ entries: [kind === 'buffer'
-      ? { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } }
-      : { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
-    ] })
-    const display = device.createRenderPipeline({
-      label: 'Plane irradiance comparison',
-      layout: device.createPipelineLayout({ bindGroupLayouts: [sampled, imageLayout] }),
-      vertex: { module, entryPoint: 'fullscreenVS' },
-      fragment: { module, entryPoint: kind === 'buffer' ? 'compareBufferFS' : 'compareTextureFS',
-        targets: [{ format: canvasFormat }] },
-    })
-    const group = device.createBindGroup({ layout: sampled, entries: [uniformEntry, { binding: 4, resource: view }] })
-    const references = new WeakMap<GPUBuffer | GPUTextureView, GPUBindGroup>()
-    function reference(input: CausticImage) {
-      const key = input.kind === 'buffer' ? input.buffer : input.view
-      let bound = references.get(key)
-      if (!bound) {
-        const entry = input.kind === 'buffer'
-          ? { binding: 2, resource: { buffer: input.buffer } }
-          : { binding: 3, resource: input.view }
-        bound = device.createBindGroup({ layout: imageLayout, entries: [entry] })
-        references.set(key, bound)
-      }
-      return bound
-    }
-    return { width, height, kind, accumulate, display, group, reference, destroy() { light.destroy(); sums?.destroy() } }
-  }
-
   let screen: ReturnType<typeof screenTargets> | undefined
   function screenFor(output: GPUTexture) {
     if (!screen || screen.width !== output.width || screen.height !== output.height) {
@@ -198,13 +112,19 @@ export function createBeamRenderer(
     }
     return screen
   }
-  let plane: ReturnType<typeof planeTargets> | undefined
   let boundField: { heights: GPUBuffer; beams: GPUBuffer; group: GPUBindGroup } | undefined
 
   return {
-    // Scales the lamp light in the lit view and the footprint view.
+    // Display settings never modify the shared optical buffers.
     setExposure(value: number) {
       exposure = value
+    },
+    setEnvironmentLight(value: number) {
+      if (!Number.isFinite(value) || value < 0) throw new Error('Environment light must be non-negative.')
+      environmentLight = value
+    },
+    setReferenceIrradiance(value: number) {
+      referenceIrradiance = Math.max(value, 1e-6)
     },
 
     render(
@@ -212,7 +132,6 @@ export function createBeamRenderer(
       mode: BeamView, result: ForwardResult,
       drawScene: (pass: GPURenderPassEncoder) => void, drawLens: (pass: GPURenderPassEncoder) => void,
     ) {
-      const compare = mode === 'plane' || mode === 'difference'
       if (mode === 'lens') {
         const targets = screenFor(output)
         const pass = encoder.beginRenderPass({
@@ -223,7 +142,7 @@ export function createBeamRenderer(
         pass.end()
         return
       }
-      const { beams: field, receiver: r } = result
+      const { beams: field } = result
       const lens = field.lens
       const count = 2 * (lens.columns - 1) * (lens.rows - 1)
       if (!boundField || boundField.heights !== lens.heightBuffer || boundField.beams !== field.buffer) {
@@ -239,31 +158,12 @@ export function createBeamRenderer(
       // WGSL Frame offsets in 32-bit words, after the two matrices.
       words.set([lens.columns, lens.rows], 32)
       data.set([lens.sizeX, lens.sizeY], 34)
-      data.set([r.sizeX, r.sizeY], 38)
-      words.set([r.width, r.height], 40)
-      data.set([output.width, output.height], 42)
-      data[44] = r.z
-      words[45] = modeId[mode]
-      data[46] = exposure
-      words[47] = count
+      data[36] = environmentLight
+      data[37] = referenceIrradiance
+      data.set([output.width, output.height], 38)
+      words[40] = modeId[mode]
+      data[41] = exposure
       device.queue.writeBuffer(uniform, 0, data)
-
-      if (compare) {
-        const image = result.caustic
-        if (!plane || plane.width !== image.width || plane.height !== image.height || plane.kind !== image.kind) {
-          plane?.destroy()
-          plane = planeTargets(image)
-        }
-        plane.accumulate(encoder, result, count)
-
-        const show = encoder.beginRenderPass({ label: 'Plane comparison', colorAttachments: [clear(output.createView())] })
-        show.setPipeline(plane.display)
-        show.setBindGroup(0, plane.group)
-        show.setBindGroup(1, plane.reference(image))
-        show.draw(3)
-        show.end()
-        return
-      }
 
       const targets = screenFor(output)
       const geometry = encoder.beginRenderPass({
@@ -281,13 +181,16 @@ export function createBeamRenderer(
         ] })
         previousHits = hits
       }
-      const pass = encoder.beginRenderPass({ label: 'Splat first hits', colorAttachments: [clear(targets.lightView)] })
-      pass.setPipeline(splat)
-      pass.setBindGroup(0, targets.splatGroup)
-      pass.setBindGroup(1, boundField.group)
-      pass.setBindGroup(2, hitGroup)
-      pass.draw(4, count)
-      pass.end()
+      // G-buffer views do not need to rasterize millions of beam footprints.
+      if (mode !== 'normals' && mode !== 'albedo') {
+        const pass = encoder.beginRenderPass({ label: 'Splat first hits', colorAttachments: [clear(targets.lightView)] })
+        pass.setPipeline(splat)
+        pass.setBindGroup(0, targets.splatGroup)
+        pass.setBindGroup(1, boundField.group)
+        pass.setBindGroup(2, hitGroup)
+        pass.draw(4, count)
+        pass.end()
+      }
 
       const show = encoder.beginRenderPass({
         label: 'Display beam lighting', colorAttachments: [clear(output.createView())],
@@ -299,7 +202,6 @@ export function createBeamRenderer(
     },
     destroy() {
       screen?.destroy()
-      plane?.destroy()
       uniform.destroy()
     },
   }

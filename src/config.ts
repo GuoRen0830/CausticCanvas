@@ -87,6 +87,9 @@ export const config = {
   maxStepsPerFrame: 3,
   rendering: {
     maxPixelRatio: 2,
+    // Presentation controls only; neither value enters the forward model.
+    lensRelief: 4,
+    environmentLight: 0.05,
     // Display only; never changes optical power or the optimization target.
     causticExposure: 1,
     // Light-view exposure once something is drawn, as the panel value of a

@@ -4,7 +4,7 @@ Run `npm ci`, then `npm run dev`. Open these paths on the local server in a WebG
 
 | Page | Coverage |
 | --- | --- |
-| `/check/import-check.html` | OBJ topology, unit-independent fitting, material paths, UV orientation and scene-training gradients |
+| `/check/import-check.html` | OBJ topology, unit-independent fitting, material paths, UV orientation, presentation isolation and scene-training gradients |
 | `/check/import-check.html?large` | Includes the 2048 × 2048 lens dispatch regression |
 | `/check/optics-check.html` | Independent CPU image/flux comparisons, finite-difference gradients, output clearing, and resource contracts |
 | `/check/optimizer-check.html` | Target normalization, loss and regularization gradients, Adam updates, and optimizer lifecycle |
@@ -21,6 +21,9 @@ The integration page also supports `shape=offset` and `shape=bar`, and `strategy
 
 - `optics-reference.ts` is an independent CPU polygon-integration reference used only by optical checks. It is not a production CPU solver.
 - The optimizer check uses a small analytic forward model to isolate optimizer errors. The integration check uses the real optical forward and backward model.
+- The presentation check renders every debug mode and compares GPU readbacks. Environment fill only changes Room; lens relief only changes Glass. Lens heights, refracted beams, first hits and solver irradiance must stay byte-identical.
+- Debug irradiance uses a fixed logarithmic scale relative to incident irradiance, without Room smoothing, environment fill or drawing-dependent exposure.
+- Splat candidates counts projected bounding rectangles before visibility/coverage rejection. It describes screen-space rendering workload and varies with camera and viewport resolution, rather than measuring received energy.
 - Optical backward differentiates refraction, polygon clipping, and projected-area normalization, then gathers adjacent triangle derivatives into vertex gradients. Derivatives are piecewise; exact clipping topology changes need separate analysis.
 - Invalid refraction/projection is skipped, and off-screen power is not redistributed. Check received power as well as loss; a darker background alone does not establish a better lens.
 - Console loss is the unfiltered image loss. Early optimization uses a filtered residual, so the logged loss need not decrease on every step. The configured iteration limit is a budget, not a convergence proof.

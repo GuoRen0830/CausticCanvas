@@ -17,6 +17,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   height: 100%;
@@ -92,7 +96,8 @@ button {
   color: var(--ink);
 }
 
-#bundled-scene {
+#bundled-scene,
+#beam-view {
   appearance: none;
   min-width: 200px;
   padding: 6px 30px 6px 12px;
@@ -178,16 +183,6 @@ h2 {
 
 h3 {
   font-size: 13px;
-}
-
-.hint {
-  margin: 4px 0 0;
-  color: var(--ink-faint);
-  font-size: 13px;
-}
-
-.hint:empty {
-  display: none;
 }
 
 #target-canvas,
@@ -285,10 +280,31 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
-#view-switch {
+#view-controls {
   position: absolute;
   right: 24px;
   bottom: 24px;
+  width: 292px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#debug-control {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+
+#beam-view {
+  width: 100%;
+  min-width: 0;
+  font-size: 13px;
+}
+
+#view-switch {
   display: flex;
   gap: 2px;
   padding: 3px;
@@ -299,6 +315,7 @@ h3 {
 }
 
 #view-switch button {
+  flex: 1;
   padding: 5px 14px;
   border: 0;
   border-radius: 7px;
@@ -311,18 +328,10 @@ h3 {
   color: #fff;
 }
 
-#view-switch select {
-  margin-left: 4px;
-  padding: 4px 8px;
-  border: 0;
-  background: transparent;
-  color: var(--ink-soft);
-}
-
 #footnote {
   position: absolute;
   left: 348px;
-  right: 220px;
+  right: 340px;
   bottom: 28px;
   display: flex;
   flex-wrap: wrap;
@@ -380,15 +389,18 @@ h3 {
     top: auto;
     left: 16px;
     right: 16px;
-    bottom: 72px;
+    bottom: 76px;
     width: auto;
-    max-height: 48dvh;
+    max-height: 34dvh;
   }
 
-  #view-switch {
+  #view-controls {
     right: 16px;
     bottom: 16px;
+    width: min(292px, calc(100% - 32px));
   }
+
+  #app:has(#debug-control:not([hidden])) #design-panel { bottom: 140px; }
 
   #footnote {
     left: 16px;

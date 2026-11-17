@@ -5,12 +5,14 @@
   import { checkObjMesh } from './obj-mesh-check.ts'
   import { checkSceneTraining, checkLargeSceneDispatch } from './scene-training.ts'
   import { checkBaseColor } from './base-color-check.ts'
+  import { checkPresentation } from './presentation-check.ts'
   const log = line => { document.querySelector('#output').textContent += '\n' + line }
   try {
     await checkObjMesh(log)
     const device = await (await navigator.gpu.requestAdapter()).requestDevice()
     try {
       await checkBaseColor(device, log)
+      await checkPresentation(device, log)
       await checkSceneTraining(device, log)
       if (new URLSearchParams(location.search).has('large')) await checkLargeSceneDispatch(device, log)
     }
