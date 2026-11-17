@@ -2,8 +2,7 @@ import { workgroupGrid } from '../gpu/dispatch'
 import { mat4 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
 import type { CausticImage, ForwardResult, ReceiverPlane } from '../contracts'
-import { buildSceneMesh } from './scene-mesh'
-import type { SceneBox } from './scene-mesh'
+import type { SceneGeometry } from './scene-mesh'
 import { createHitTracer } from './hit-tracer'
 import commonShader from './shaders/beam-common.wgsl?raw'
 import coverageShader from './shaders/pixel-coverage.wgsl?raw'
@@ -27,18 +26,18 @@ const clear = (view: GPUTextureView): GPURenderPassColorAttachment => ({
 export function createBeamRenderer(
   device: GPUDevice, canvasFormat: GPUTextureFormat,
   aperture: { sizeX: number; sizeY: number; thickness: number },
-  receiver: ReceiverPlane, opticalToWorld: Mat4, exposure: number, box: SceneBox,
-  mesh = buildSceneMesh(receiver, box),
+  receiver: ReceiverPlane, opticalToWorld: Mat4, exposure: number, { mesh, referenceBox }: SceneGeometry,
 ) {
   const tests = createTestBeams(device, aperture)
   const data = new Float32Array(56)
   const words = new Uint32Array(data.buffer)
   const localVP = data.subarray(0, 16)
   const inverseLocalVP = data.subarray(16, 32)
-  // Shared scene geometry, in optical-local meters. Each uniform vec3 starts
-  // on a 16-byte boundary.
-  data.set(box.center.map((c, axis) => c - 0.5 * box.size[axis]), 48)
-  data.set(box.center.map((c, axis) => c + 0.5 * box.size[axis]), 52)
+  if (referenceBox) {
+    const { center, size } = referenceBox
+    data.set(center.map((c, axis) => c - 0.5 * size[axis]), 48)
+    data.set(center.map((c, axis) => c + 0.5 * size[axis]), 52)
+  }
   const uniform = device.createBuffer({
     label: 'Beam frame', size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
@@ -225,6 +224,9 @@ export function createBeamRenderer(
       drawScene: (pass: GPURenderPassEncoder) => void, drawLens: (pass: GPURenderPassEncoder) => void,
       method: SceneMethod = 'first-hit',
     ) {
+      if (!referenceBox && (method === 'analytic' || mode === 'blocked')) {
+        throw new Error('Box reference lighting requires the built-in box scene.')
+      }
       const compare = mode === 'plane' || mode === 'difference'
       if (mode === 'lens') {
         const targets = screenFor(output)

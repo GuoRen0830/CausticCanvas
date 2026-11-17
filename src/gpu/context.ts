@@ -19,7 +19,11 @@ export async function initializeGPU(canvas: HTMLCanvasElement, lens: Pick<LensSt
     throw new Error(`Lens ${lens.columns} x ${lens.rows} needs a ${storageBytes}-byte buffer. This GPU supports ${Math.min(adapter.limits.maxStorageBufferBindingSize, adapter.limits.maxBufferSize)} bytes per storage binding.`)
   }
   const device = await adapter.requestDevice({
-    requiredLimits: { maxStorageBufferBindingSize: storageBytes, maxBufferSize: storageBytes },
+    // Imported scene vertices and BVH triangles can be larger than the lens buffers.
+    requiredLimits: {
+      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+      maxBufferSize: adapter.limits.maxBufferSize,
+    },
     requiredFeatures: adapter.features.has('float32-blendable') ? ['float32-blendable'] : [],
   })
   const context = canvas.getContext('webgpu')

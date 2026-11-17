@@ -1,6 +1,6 @@
 import { mat4 } from 'wgpu-matrix'
 
-interface OrbitCameraOptions {
+export interface OrbitCameraOptions {
   target: [number, number, number]
   span: number
 }
@@ -13,11 +13,11 @@ export function createOrbitCamera(
   // Start at the same oblique angle as the original preview.
   const initialAzimuth = Math.atan2(1.3, 1.8)
   const initialElevation = Math.atan2(0.9, Math.hypot(1.3, 1.8))
-  const initialDistance = span * Math.hypot(1.3, 0.9, 1.8)
+  const distancePerSpan = Math.hypot(1.3, 0.9, 1.8)
   const elevationLimit = Math.PI / 2 - 0.01
   let azimuth = initialAzimuth
   let elevation = initialElevation
-  let distance = initialDistance
+  let distance = span * distancePerSpan
   let activePointer: number | null = null
   let previousX = 0
   let previousY = 0
@@ -89,7 +89,7 @@ export function createOrbitCamera(
     releasePointer()
     azimuth = initialAzimuth
     elevation = initialElevation
-    distance = initialDistance
+    distance = span * distancePerSpan
     onChange()
   }
 
@@ -104,6 +104,13 @@ export function createOrbitCamera(
   window.addEventListener('blur', releasePointer, options)
 
   return {
+    frame(next: OrbitCameraOptions) {
+      distance *= next.span / span
+      target = next.target
+      span = next.span
+      onChange()
+    },
+
     update(aspect: number) {
       // Y is up; azimuth turns around Y and elevation rises above XZ.
       const horizontalDistance = distance * Math.cos(elevation)

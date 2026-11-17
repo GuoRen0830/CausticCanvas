@@ -30,10 +30,16 @@ export function createDrawingPad(
     const ctx = guide.getContext('2d')!
     const image = ctx.createImageData(width, height)
     const depths = new Float32Array(view.samples.buffer)
-    let far = 0
-    for (let i = 0; i < width * height; i++) far = Math.max(far, depths[2*i+1])
+    let near = Infinity, far = -Infinity
     for (let i = 0; i < width * height; i++) {
-      const shade = view.surfaceAreas[i] > 0 ? 22 + 60 * (1 - depths[2*i+1] / far) : 2
+      if (view.surfaceAreas[i] === 0) continue
+      near = Math.min(near, depths[2*i+1])
+      far = Math.max(far, depths[2*i+1])
+    }
+    for (let i = 0; i < width * height; i++) {
+      // Use the visible depth range so a low-profile OBJ is legible against the floor.
+      const relief = far > near ? (far - depths[2*i+1]) / (far - near) : 0
+      const shade = view.surfaceAreas[i] > 0 ? 22 + 60 * relief : 2
       image.data.set([shade, shade, shade, 255], 4 * i)
     }
     ctx.putImageData(image, 0, 0)

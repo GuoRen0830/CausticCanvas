@@ -51,10 +51,9 @@ export async function checkFirstHits(device: GPUDevice, report: (line: string) =
   const tracer = createHitTracer(device, shader, uniform, mesh)
   const packedFaces = buildSceneBvh(mesh).triangles
   const receiver = { sizeX: 0.2, sizeY: 0.2, z: 0.5, width: 64, height: 64 }
-  const box = { center: [3, 3, 3], size: [0.01, 0.01, 0.01] } as const
   const model = mat4.identity()
-  const scene = createSceneRenderer(device, receiver, box, model, mesh)
-  const beams = createBeamRenderer(device, 'rgba32float', spec, receiver, model, 1, box, mesh)
+  const scene = createSceneRenderer(device, mesh, model)
+  const beams = createBeamRenderer(device, 'rgba32float', spec, receiver, model, 1, { mesh })
   const lensPreview = createLensRenderer(device, 'rgba32float', lens, model)
   const tex = device.createTexture({ size: [64, 64], format: 'rgba32float',
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC })

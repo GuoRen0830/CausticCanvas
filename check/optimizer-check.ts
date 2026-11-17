@@ -122,7 +122,9 @@ async function main() {
   const receiver = { z: 0.5, sizeX: 0.4, sizeY: 0.4, width: 64, height: 64 }
   const optics = { ...config.optics }
   // Disable loss filtering so the pixel gradient has a closed form; loss-filter-check covers the filter.
-  const settings: OptimizerSettings = { ...config.optimizer, maxIterations: 400, lossLogInterval: 50, lossBlurSigma: 0 }
+  const settings: OptimizerSettings = {
+    ...config.optimizer, maxIterations: 400, lossLogInterval: 50, lossBlurSigma: 0, lossBlurFinalSigma: 0,
+  }
   const dx = 0.2 / (cols - 1), dy = 0.2 / (rows - 1)
   const lensOf = (buf: GPUBuffer): LensState => ({ columns: cols, rows, sizeX: 0.2, sizeY: 0.2, heightBuffer: buf })
 
@@ -167,7 +169,11 @@ async function main() {
     const h = new Float32Array(cols * rows).fill(0.01)
     const input: ForwardInput = { lens: lensOf(heightsBuffer(device, h)), optics, receiver }
     const toy = makeToyForward(device, input, kind, {})
-    const opt = (await createLensOptimizer(device, input, toy.model, settings))! as any
+    // The block-mean reference below minimizes the optical loss alone.
+    // Regularization is exercised separately by the finite-difference check above.
+    const opt = (await createLensOptimizer(device, input, toy.model, {
+      ...settings, smoothnessWeight: 0, slopeWeight: 0,
+    }))! as any
     // Smooth reachable target so the toy problem has a low-loss solution.
     const tw = new Float32Array(64 * 64)
     for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) tw[y * 64 + x] = 0.5 + 0.4 * Math.sin(x / 10) * Math.cos(y / 13)

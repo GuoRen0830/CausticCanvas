@@ -124,12 +124,30 @@ h1 {
   margin-top: 24px;
 }
 
-#clear-target {
-  margin-top: 16px;
+.scene-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+#scene-status {
+  overflow-wrap: anywhere;
+}
+
+#design-panel button {
   padding: 8px 16px;
   color: inherit;
   background: #252d39;
   border: 1px solid #465064;
   border-radius: 6px;
   cursor: pointer;
+}
+
+#design-panel button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+#clear-target {
+  margin-top: 16px;
 }

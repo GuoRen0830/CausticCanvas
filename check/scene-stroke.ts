@@ -3,7 +3,7 @@ import { createFlatLens } from '../src/geometry/lens-mesh'
 import { buildDesignView } from '../src/optics/design-view'
 import { createForwardModel } from '../src/optics/forward-model'
 import { createLensOptimizer } from '../src/optimization/lens-optimizer'
-import { buildSceneMesh } from '../src/rendering/scene-mesh'
+import { buildSceneGeometry } from '../src/rendering/scene-mesh'
 import { createSimulation } from '../src/simulation'
 import type { ForwardResult } from '../src/contracts'
 import { strokeBox, strokeFractions, strokeOptics, strokeReceiver, strokeWeights } from './stroke-case'
@@ -14,7 +14,7 @@ export async function checkSceneStroke(device: GPUDevice, report: (line: string)
   const receiver = { ...strokeReceiver }
   const lens = createFlatLens(device,{ columns: 33, rows: 33, sizeX: 0.2, sizeY: 0.2, thickness: 0.01 })
   const state = { lens, receiver, optics: strokeOptics, target: null }
-  const view = buildDesignView(buildSceneMesh(receiver,strokeBox),receiver)
+  const view = buildDesignView(buildSceneGeometry(receiver, { box: strokeBox }).mesh, receiver)
   const solver = (await createForwardModel(device,state,{designView:view}))!
   const settings = { ...config.optimizer, maxIterations: 3000, lossLogInterval: 0 }
   const optimizer = (await createLensOptimizer(device,state,solver,settings))!

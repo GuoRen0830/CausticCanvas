@@ -1,16 +1,12 @@
 import { mat4 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
-import type { ReceiverPlane } from '../contracts'
 import sceneShaderSource from './shaders/scene.wgsl?raw'
-import { buildSceneMesh, sceneVertexStride } from './scene-mesh'
-import type { SceneBox } from './scene-mesh'
+import { sceneVertexStride, type SceneMesh } from './scene-mesh'
 
 export function createSceneRenderer(
   device: GPUDevice,
-  receiver: ReceiverPlane,
-  box: SceneBox,
+  mesh: SceneMesh,
   model: Mat4,
-  mesh = buildSceneMesh(receiver, box),
 ) {
   const vertexBuffer = device.createBuffer({
     label: 'Scene vertices',

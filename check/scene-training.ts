@@ -1,5 +1,5 @@
 import { config } from '../src/config'
-import { buildSceneMesh } from '../src/rendering/scene-mesh'
+import { buildSceneGeometry } from '../src/rendering/scene-mesh'
 import { createFlatLens } from '../src/geometry/lens-mesh'
 import { buildDesignView } from '../src/optics/design-view'
 import { createForwardModel } from '../src/optics/forward-model'
@@ -105,7 +105,7 @@ export async function checkLargeSceneDispatch(device: GPUDevice, report: (line: 
   const lens = createFlatLens(device, { ...config.lens, columns: 2049, rows: 2049 })
   const receiver = config.receiver
   const input = { lens, receiver, optics: config.optics }
-  const view = buildDesignView(buildSceneMesh(receiver, config.scene.box), receiver)
+  const view = buildDesignView(buildSceneGeometry(receiver, { box: config.scene.box }).mesh, receiver)
   const model = await createForwardModel(device, input, { designView: view })
   const optimizer = (await createLensOptimizer(device, input, model, { ...config.optimizer, lossLogInterval: 0 }))!
   const tailCount = 2048

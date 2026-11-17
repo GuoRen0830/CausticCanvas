@@ -3,9 +3,11 @@
 <body><pre id="output">Running beam checks...</pre>
 <script type="module">
   import { checkBeams } from './beam-check.ts'
+  import { checkObjMesh } from './obj-mesh-check.ts'
   const log = document.querySelector('#output')
   const report = line => { log.textContent += '\n' + line }
   try {
+    await checkObjMesh(report)
     const adapter = await navigator.gpu.requestAdapter()
     const device = await adapter.requestDevice()
     device.pushErrorScope('validation')

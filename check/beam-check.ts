@@ -3,6 +3,7 @@ import { createFlatLens } from '../src/geometry/lens-mesh'
 import { createForwardModel } from '../src/optics/forward-model'
 import { createBeamRenderer } from '../src/rendering/beam-renderer'
 import { createSceneRenderer } from '../src/rendering/scene-renderer'
+import { buildSceneGeometry } from '../src/rendering/scene-mesh'
 import type { BeamSource, BeamView } from '../src/rendering/beam-renderer'
 import type { ForwardResult } from '../src/contracts'
 import { checkSceneOcclusion } from './scene-occlusion'
@@ -20,8 +21,9 @@ export async function checkBeams(device: GPUDevice, report: (line: string) => vo
   const forward = (await createForwardModel(device, input))!
   const exposure = 0.0001
   const box = { center: [0.05, 0.03, 0.3], size: [0.08, 0.08, 0.1] } as const
-  const beam = createBeamRenderer(device, 'rgba32float', lensSpec, receiver, model, exposure, box)
-  const scene = createSceneRenderer(device, receiver, box, model)
+  const geometry = buildSceneGeometry(receiver, { box })
+  const beam = createBeamRenderer(device, 'rgba32float', lensSpec, receiver, model, exposure, geometry)
+  const scene = createSceneRenderer(device, geometry.mesh, model)
   // View along optical +Z with screen-right +X and screen-down +Y. The
   // receiver then faces the camera and a screen row equals an optical row.
   const clip = mat4.scaling([2 / receiver.sizeX, -2 / receiver.sizeY, 1])
