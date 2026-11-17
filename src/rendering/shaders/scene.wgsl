@@ -48,6 +48,12 @@ struct GBuffer {
   @location(2) objectAndNormal: vec2u,
 }
 
+// Same bytes as pack4x8snorm(vec4f(n, 0)), which returns 0 on some Metal drivers.
+fn packNormal(n: vec3f) -> u32 {
+  let q = vec3i(round(clamp(n, vec3f(-1), vec3f(1)) * 127.0)) & vec3i(255);
+  return u32(q.x) | (u32(q.y) << 8u) | (u32(q.z) << 16u);
+}
+
 @fragment
 fn fragmentMain(input: VertexOutput) -> GBuffer {
   // Screen Y points down, so dy cross dx follows the front-face winding.
@@ -58,6 +64,6 @@ fn fragmentMain(input: VertexOutput) -> GBuffer {
       textureSample(baseColorMap, baseColorSampler, input.uv).rgb, 1.0),
     // Signed unit normals encoded in UNORM8; zero is exactly byte 128.
     vec4<f32>((normalize(input.localNormal) * 127.0 + 128.0) / 255.0, input.isFloor),
-    vec2u(input.objectId, pack4x8snorm(vec4f(geometric, 0))),
+    vec2u(input.objectId, packNormal(geometric)),
   );
 }
