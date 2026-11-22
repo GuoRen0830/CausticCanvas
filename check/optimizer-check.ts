@@ -121,9 +121,11 @@ async function main() {
   const cols = 9, rows = 9
   const receiver = { z: 0.5, sizeX: 0.4, sizeY: 0.4, width: 64, height: 64 }
   const optics = { ...config.optics }
-  // Disable loss filtering so the pixel gradient has a closed form; loss-filter-check covers the filter.
+  // Disable loss filtering and the spill penalty so the pixel gradient has a
+  // closed form; loss-filter-check covers the filter, section 4 the spill penalty.
   const settings: OptimizerSettings = {
     ...config.optimizer, maxIterations: 400, lossLogInterval: 50, lossBlurSigma: 0, lossBlurFinalSigma: 0,
+    spillWeight: 0,
   }
   const dx = 0.2 / (cols - 1), dy = 0.2 / (rows - 1)
   const lensOf = (buf: GPUBuffer): LensState => ({ columns: cols, rows, sizeX: 0.2, sizeY: 0.2, heightBuffer: buf })
@@ -248,7 +250,42 @@ async function main() {
     opt.destroy(); toy.model.destroy(); input.lens.heightBuffer.destroy()
   }
 
-  // 4. No backward -> null.
+  // 4. Spill penalty: the pixel gradient gains spillWeight * D / (mean N), with
+  // D the distance in pixels to the nearest painted pixel (brute force here).
+  {
+    const input: ForwardInput = { lens: lensOf(heightsBuffer(device, new Float32Array(cols * rows).fill(0.01))), optics, receiver }
+    const toy = makeToyForward(device, input, 'buffer', {})
+    const spillWeight = 0.5
+    const opt = (await createLensOptimizer(device, input, toy.model, { ...settings, spillWeight }))!
+    const tw = new Float32Array(64 * 64)
+    const painted: [number, number][] = []
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+      if ((x >= 10 && x < 18 && y >= 40 && y < 52) || (x - 45) ** 2 + (y - 20) ** 2 < 30) { tw[y * 64 + x] = 1; painted.push([x, y]) }
+    }
+    const target: TargetImage = { width: 64, height: 64, version: 1, values: tw }
+    opt.setTarget(target)
+    const enc = device.createCommandEncoder()
+    opt.encodeStep(enc, { lens: input.lens, optics, receiver })
+    device.queue.submit([enc.finish()])
+    const power = incidentPower(input)
+    const Tn = normalizeTarget(target, receiver, power)!
+    const mean = power / (receiver.sizeX * receiver.sizeY)
+    const g = await readBuffer(device, toy.captured.pixelGradient!, 64 * 64 * 4)
+    let gErr = 0, gMax = 0, spillMax = 0
+    for (let j = 0; j < g.length; j++) {
+      const x = j % 64, y = Math.floor(j / 64)
+      let d = Infinity
+      for (const [px, py] of painted) d = Math.min(d, Math.hypot(x - px, y - py))
+      const spill = spillWeight * d / (mean * g.length)
+      const ref = 2 * (mean - Tn[j]) / (mean * mean * g.length) + spill
+      gErr = Math.max(gErr, Math.abs(ref - g[j])); gMax = Math.max(gMax, Math.abs(ref)); spillMax = Math.max(spillMax, spill)
+    }
+    check(spillMax > 0.1 * gMax && gErr / gMax < 1e-5,
+      `pixel gradient adds the spill term spillWeight D/(mean N), rel err ${(gErr / gMax).toExponential(2)}`)
+    opt.destroy(); toy.model.destroy(); input.lens.heightBuffer.destroy()
+  }
+
+  // 5. No backward -> null.
   const noBackward: ForwardModel = { encode: () => { throw new Error('x') }, destroy() {} }
   const flat = lensOf(heightsBuffer(device, new Float32Array(81)))
   const none = await createLensOptimizer(device, { lens: flat, optics, receiver }, noBackward)

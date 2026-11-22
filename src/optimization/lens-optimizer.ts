@@ -66,7 +66,7 @@ function validateSettings(settings: OptimizerSettings) {
   ]
   const nonnegative = [settings.smoothnessWeight, settings.slopeWeight, settings.lossBlurSigma,
     settings.curvatureLengthScale, settings.gradientSmoothingSigma, settings.lossBlurFinalSigma,
-    settings.updateSmoothingSigma]
+    settings.updateSmoothingSigma, settings.spillWeight, settings.creaseSlope]
   const fractions = [settings.lossBlurAnnealFraction, settings.learningRateFloor]
   if (
     positive.some((value) => !Number.isFinite(value) || value <= 0) ||
@@ -96,6 +96,63 @@ function sameGrid(a: Readonly<LensState>, b: Readonly<LensState>) {
 function sameReceiver(a: Readonly<ReceiverPlane>, b: Readonly<ReceiverPlane>) {
   return a.width === b.width && a.height === b.height &&
     a.sizeX === b.sizeX && a.sizeY === b.sizeY && a.z === b.z
+}
+
+// Exact squared Euclidean distance transform along one line (Felzenszwalb and
+// Huttenlocher): out[q] = min_p (q - p)^2 + f[p].
+function distanceLine(f: Float64Array, out: Float64Array, n: number) {
+  const v = new Int32Array(n), z = new Float64Array(n + 1)
+  let k = 0
+  v[0] = 0; z[0] = -Infinity; z[1] = Infinity
+  for (let q = 1; q < n; q++) {
+    if (f[q] === Infinity) continue
+    if (f[v[k]] === Infinity) { v[k] = q; continue }
+    let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k])
+    while (k > 0 && s <= z[k]) {
+      k--
+      s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k])
+    }
+    k++
+    v[k] = q; z[k] = s; z[k + 1] = Infinity
+  }
+  k = 0
+  for (let q = 0; q < n; q++) {
+    while (z[k + 1] < q) k++
+    const d = q - v[k]
+    out[q] = f[v[k]] === Infinity ? Infinity : d * d + f[v[k]]
+  }
+}
+
+// Gradient of the spill penalty spillWeight * mean(E * D) / meanIrradiance with
+// respect to each pixel's irradiance E, where D is the distance in pixels to the
+// nearest painted pixel (a target above a quarter of the painted level).
+export function spillGradient(target: Float32Array, { width, height }: { width: number, height: number },
+  spillWeight: number, meanIrradiance: number) {
+  const gradient = new Float32Array(target.length)
+  if (!(spillWeight > 0) || !(meanIrradiance > 0)) return gradient
+  let sum = 0, sumSquares = 0
+  for (const value of target) { sum += value; sumSquares += value * value }
+  if (!(sum > 0)) return gradient
+  const threshold = 0.25 * sumSquares / sum
+  const squared = new Float64Array(target.length)
+  for (let i = 0; i < target.length; i++) squared[i] = target[i] > threshold ? 0 : Infinity
+  const line = new Float64Array(Math.max(width, height)), result = new Float64Array(Math.max(width, height))
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) line[x] = squared[y * width + x]
+    distanceLine(line, result, width)
+    for (let x = 0; x < width; x++) squared[y * width + x] = result[x]
+  }
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) line[y] = squared[y * width + x]
+    distanceLine(line, result, height)
+    for (let y = 0; y < height; y++) squared[y * width + x] = result[y]
+  }
+  const scale = spillWeight / (meanIrradiance * target.length)
+  for (let i = 0; i < target.length; i++) {
+    const distance = Math.sqrt(squared[i])
+    gradient[i] = Number.isFinite(distance) ? scale * distance : 0
+  }
+  return gradient
 }
 
 function writeParams(
@@ -140,6 +197,7 @@ function writeParams(
   view.setFloat32(92, settings.gradientSmoothingSigma, true)
   view.setFloat32(96, settings.lossBlurFinalSigma, true)
   view.setFloat32(100, settings.updateSmoothingSigma, true)
+  view.setFloat32(104, settings.creaseSlope, true)
   return data
 }
 
@@ -202,6 +260,8 @@ export async function createLensOptimizer(
     const pixelGradient = createBuffer('Pixel loss gradient', pixelCount * 4, storage)
     const filterA = createBuffer('Loss filter A', pixelCount * 4, storage)
     const filterB = createBuffer('Loss filter B', pixelCount * 4, storage)
+    // Spill-penalty gradient per pixel, added to the filtered data gradient.
+    const spillGradients = createBuffer('Spill gradient', pixelCount * 4, storage)
     const lossPartials = createBuffer('Loss partial sums', lossGroups * 4, storage)
     const lossStaging = createBuffer(
       'Loss readback',
@@ -234,6 +294,7 @@ export async function createLensOptimizer(
         storageEntry(8, 'storage'),
         storageEntry(9, 'storage'),
         storageEntry(10, 'storage'),
+        storageEntry(11, 'read-only-storage'),
       ],
     })
     const causticLayouts = {
@@ -314,6 +375,7 @@ export async function createLensOptimizer(
         { binding: 8, resource: { buffer: stepState } },
         { binding: 9, resource: { buffer: filterA } },
         { binding: 10, resource: { buffer: filterB } },
+        { binding: 11, resource: { buffer: spillGradients } },
       ],
     })
     const updateBindings = device.createBindGroup({
@@ -475,6 +537,8 @@ export async function createLensOptimizer(
         done = !active
         if (!normalized) return
         device.queue.writeBuffer(targetBuffer, 0, normalized)
+        device.queue.writeBuffer(spillGradients, 0, spillGradient(normalized, receiver, settings.spillWeight,
+          power / (receiver.sizeX * receiver.sizeY)))
         if (coarse && settings.transportInit > 0) {
           // Power per light-view pixel, then a global lens-to-target assignment.
           const pixelArea = (receiver.sizeX / receiver.width) * (receiver.sizeY / receiver.height)

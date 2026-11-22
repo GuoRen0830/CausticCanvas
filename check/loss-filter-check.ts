@@ -5,10 +5,11 @@ async function run() {
  const width=9,height=7,n=width*height,scale=1/n
  const residual=Float32Array.from({length:n},(_,i)=>Math.sin(i*.7)+.2)
  const make=(size:number,uniform=false)=>device.createBuffer({size,usage:(uniform?GPUBufferUsage.UNIFORM:GPUBufferUsage.STORAGE)|GPUBufferUsage.COPY_DST|GPUBufferUsage.COPY_SRC})
- const params=make(112,true),state=make(16),input=make(n*4),a=make(n*4),b=make(n*4)
- const entries=[{binding:0,visibility:GPUShaderStage.COMPUTE,buffer:{type:'uniform' as const}},...[2,8,9,10].map(binding=>({binding,visibility:GPUShaderStage.COMPUTE,buffer:{type:'storage' as const}}))]
+ // spill stays zero (the spill penalty off), so the gradient is the filter's alone.
+ const params=make(112,true),state=make(16),input=make(n*4),a=make(n*4),b=make(n*4),spill=make(n*4)
+ const entries=[{binding:0,visibility:GPUShaderStage.COMPUTE,buffer:{type:'uniform' as const}},...[2,8,9,10].map(binding=>({binding,visibility:GPUShaderStage.COMPUTE,buffer:{type:'storage' as const}})),{binding:11,visibility:GPUShaderStage.COMPUTE,buffer:{type:'read-only-storage' as const}}]
  const layout=device.createBindGroupLayout({entries})
- const group=device.createBindGroup({layout,entries:[{binding:0,resource:{buffer:params}},{binding:2,resource:{buffer:input}},{binding:8,resource:{buffer:state}},{binding:9,resource:{buffer:a}},{binding:10,resource:{buffer:b}}]})
+ const group=device.createBindGroup({layout,entries:[{binding:0,resource:{buffer:params}},{binding:2,resource:{buffer:input}},{binding:8,resource:{buffer:state}},{binding:9,resource:{buffer:a}},{binding:10,resource:{buffer:b}},{binding:11,resource:{buffer:spill}}]})
  const module=device.createShaderModule({code:shader})
  const pipelines=await Promise.all(['filterResidualX','filterResidualY','filterGradientY','filterGradientX'].map(entryPoint=>device.createComputePipelineAsync({layout:device.createPipelineLayout({bindGroupLayouts:[layout]}),compute:{module,entryPoint}})))
  const results=[]

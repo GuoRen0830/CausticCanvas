@@ -34,6 +34,8 @@ struct Params {
   lossBlurFinalSigma: f32,
   // Gaussian width in meters for the Adam update blur (0 = unsmoothed update).
   updateSigma: f32,
+  // Slope difference that stops the gradient blur at a crease (0 = plain Gaussian).
+  creaseSlope: f32,
 }
 
 struct StepState {
@@ -47,6 +49,8 @@ struct StepState {
 @group(0) @binding(1) var<storage, read> targetIrradiance: array<f32>;
 @group(0) @binding(2) var<storage, read_write> pixelGradient: array<f32>;
 @group(0) @binding(3) var<storage, read_write> lossPartials: array<f32>;
+// Spill-penalty gradient per pixel (distance to the drawing), added unfiltered.
+@group(0) @binding(11) var<storage, read> spillGradient: array<f32>;
 
 // Caustic image (group 1), one binding per output kind.
 @group(1) @binding(0) var<storage, read> causticBuffer: array<f32>;
@@ -169,7 +173,8 @@ fn filterGradientY(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgr
 fn filterGradientX(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
   let index = id.x + id.y * groups.x * LOSS_WORKGROUP;
   if (index < params.imageSize.x * params.imageSize.y) {
-    pixelGradient[index] = 2.0 * params.invMeanIrradianceSq * params.invPixelCount * filtered(index, 0u, 1u);
+    pixelGradient[index] = 2.0 * params.invMeanIrradianceSq * params.invPixelCount * filtered(index, 0u, 1u) +
+      spillGradient[index];
   }
 }
 
@@ -185,21 +190,43 @@ fn finiteGradient(value: f32) -> f32 {
 // meters, renormalized at the lens boundary (no flux leaves the aperture).
 // Runs before computeCurvature, so the curvature buffer is free scratch.
 fn smoothedGradient(vertex: u32, axis: u32, source: u32) -> f32 {
-  return gaussianAlong(vertex, axis, source, params.gradientSigma);
+  return gaussianAlong(vertex, axis, source, params.gradientSigma, params.creaseSlope);
 }
 
-fn gaussianAlong(vertex: u32, axis: u32, source: u32, width: f32) -> f32 {
+// Surface slope at a grid point from central differences (one-sided at the border).
+fn vertexSlope(q: vec2<i32>) -> vec2<f32> {
+  let size = vec2<i32>(params.gridSize);
+  let xm = max(q.x - 1, 0);
+  let xp = min(q.x + 1, size.x - 1);
+  let ym = max(q.y - 1, 0);
+  let yp = min(q.y + 1, size.y - 1);
+  let w = params.gridSize.x;
+  let gx = (heights[u32(q.y) * w + u32(xp)] - heights[u32(q.y) * w + u32(xm)]) / (f32(xp - xm) * params.spacing.x);
+  let gy = (heights[u32(yp) * w + u32(q.x)] - heights[u32(ym) * w + u32(q.x)]) / (f32(yp - ym) * params.spacing.y);
+  return vec2<f32>(gx, gy);
+}
+
+// Gaussian along one axis. With creaseSlope > 0, each neighbor's weight also
+// falls off with its slope difference from this vertex (a bilateral filter),
+// so the blur does not cross creases.
+fn gaussianAlong(vertex: u32, axis: u32, source: u32, width: f32, creaseSlope: f32) -> f32 {
   let coordinate = vec2<i32>(i32(vertex % params.gridSize.x), i32(vertex / params.gridSize.x));
   let sigma = width / params.spacing[axis];
   let radius = i32(ceil(3.0 * sigma));
   let size = vec2<i32>(params.gridSize);
+  var center = vec2<f32>(0.0);
+  if (creaseSlope > 0.0) { center = vertexSlope(coordinate); }
   var sum = 0.0;
   var weightSum = 0.0;
   for (var offset = -radius; offset <= radius; offset++) {
     var q = coordinate;
     q[axis] += offset;
     if (q[axis] < 0 || q[axis] >= size[axis]) { continue; }
-    let weight = exp(-0.5 * f32(offset * offset) / max(sigma * sigma, 1e-8));
+    var weight = exp(-0.5 * f32(offset * offset) / max(sigma * sigma, 1e-8));
+    if (creaseSlope > 0.0) {
+      let difference = (vertexSlope(q) - center) / creaseSlope;
+      weight *= exp(-dot(difference, difference));
+    }
     let i = u32(q.y) * params.gridSize.x + u32(q.x);
     var value = 0.0;
     if (source == 0u) { value = heightGradient[i]; } else { value = curvature[i]; }
@@ -384,7 +411,7 @@ fn smoothUpdateX(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgrou
   if (vertex >= params.gridSize.x * params.gridSize.y) {
     return;
   }
-  heightGradient[vertex] = gaussianAlong(vertex, 0u, 1u, params.updateSigma);
+  heightGradient[vertex] = gaussianAlong(vertex, 0u, 1u, params.updateSigma, 0.0);
 }
 
 @compute @workgroup_size(64)
@@ -393,7 +420,7 @@ fn applySmoothUpdateY(@builtin(global_invocation_id) id: vec3u, @builtin(num_wor
   if (vertex >= params.gridSize.x * params.gridSize.y) {
     return;
   }
-  let step = gaussianAlong(vertex, 1u, 0u, params.updateSigma);
+  let step = gaussianAlong(vertex, 1u, 0u, params.updateSigma, 0.0);
   heights[vertex] = max(heights[vertex] - step, params.minHeight);
 }
 

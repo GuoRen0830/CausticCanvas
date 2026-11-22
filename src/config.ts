@@ -55,6 +55,17 @@ export const config = {
     // before regularization and Adam. Damps vertex-scale ripples on fine grids,
     // where each beam is smaller than a receiver pixel; 0 disables.
     gradientSmoothingSigma: 0.0015,
+    // Make that blur stop at lens creases: a neighbor whose surface slope differs
+    // by more than about this much (dimensionless) barely contributes, so the
+    // push on one side of a crease no longer smears it across. 0 keeps the
+    // plain Gaussian.
+    creaseSlope: 0.3,
+    // Weight of a spill penalty: light on the receiver costs its distance in
+    // pixels to the nearest painted pixel. Unlike the squared error, whose
+    // gradient vanishes inside an evenly lit dark area, this pulls stray light
+    // toward the drawing from any distance; 0 disables. Above about 0.03 it
+    // starts to pull light out of small features such as the face's eyes.
+    spillWeight: 0.02,
     // Gaussian width in lens meters for blurring each Adam step; 0 disables.
     updateSmoothingSigma: 0,
     // Coarse-to-fine: first optimize a grid with this many cells per side (it
@@ -76,7 +87,7 @@ export const config = {
     coarseStepsPerCall: 10,
     // Initial loss-filter width in pixels for the fine refinement after a coarse run.
     refineLossBlurSigma: 2,
-    refineIterations: 300,
+    refineIterations: 2000,
     refineLearningRate: 3e-6,
     // Heights are projected to at least this exit-surface z in meters.
     minHeight: 0.002,
