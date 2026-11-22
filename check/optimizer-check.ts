@@ -285,7 +285,72 @@ async function main() {
     opt.destroy(); toy.model.destroy(); input.lens.heightBuffer.destroy()
   }
 
-  // 5. No backward -> null.
+  // 5. Vertex motion: an x/y gradient that pulls every vertex toward the
+  // centre must compress the mesh without folding any face below
+  // minAreaRatio, keep the border on the aperture, keep each vertex on the
+  // (planar) surface, and restart on a new target.
+  {
+    const plane = (x: number, y: number) => 0.01 + 0.05 * x + 0.03 * y
+    const tilted = Float32Array.from({ length: cols * rows }, (_, v) => plane((v % cols) * dx, Math.floor(v / cols) * dy))
+    const input: ForwardInput = { lens: lensOf(heightsBuffer(device, tilted)), optics, receiver }
+    const toy = makeToyForward(device, input, 'buffer', { zeroOptical: true })
+    const pull = new Float32Array(2 * cols * rows)
+    for (let v = 0; v < cols * rows; v++) { pull[2 * v] = (v % cols) - 4; pull[2 * v + 1] = Math.floor(v / cols) - 4 }
+    const pullBuffer = heightsBuffer(device, pull)
+    const backward = toy.model.encodeBackward!.bind(toy.model)
+    let offsetCalls = 0
+    toy.model.encodeBackward = (encoder, inp, res, pixelGradient, heightGradient, offsetGradient) => {
+      backward(encoder, inp, res, pixelGradient, heightGradient)
+      if (offsetGradient) { offsetCalls++; encoder.copyBufferToBuffer(pullBuffer, 0, offsetGradient, 0, pull.byteLength) }
+    }
+    const minAreaRatio = 0.2
+    // A negligible height step: Adam would turn rounding-level height gradients
+    // into full steps, and only the surface-following part is under test here.
+    const opt = (await createLensOptimizer(device, input, toy.model, { ...settings, maxIterations: 80,
+      learningRate: 1e-12, xyLearningRate: 0.3, xySmoothnessWeight: 0, xySmoothingSigma: 0, minAreaRatio }))!
+    const values = new Float32Array(64 * 64).fill(1)
+    opt.setTarget({ width: 64, height: 64, version: 1, values })
+    let lens = input.lens
+    for (let k = 0; k < 80; k++) {
+      const enc = device.createCommandEncoder()
+      lens = opt.encodeStep(enc, { lens, optics, receiver }).lens
+      device.queue.submit([enc.finish()])
+    }
+    const o = await readBuffer(device, lens.offsetBuffer!, pull.byteLength)
+    const moved = await readBuffer(device, lens.heightBuffer, cols * rows * 4)
+    const at = (v: number) => [(v % cols) * dx + o[2 * v], Math.floor(v / cols) * dy + o[2 * v + 1]]
+    const offSurface = Math.max(...Array.from(moved, (h, v) => Math.abs(h - plane(at(v)[0], at(v)[1]))))
+    let smallest = Infinity, largest = 0, border = 0
+    for (let r = 0; r < rows - 1; r++) for (let c = 0; c < cols - 1; c++) {
+      const a = r * cols + c
+      for (const [i, j, k] of [[a, a + 1, a + cols], [a + 1, a + cols + 1, a + cols]]) {
+        const [p, q, t] = [at(i), at(j), at(k)]
+        smallest = Math.min(smallest, ((q[0] - p[0]) * (t[1] - p[1]) - (t[0] - p[0]) * (q[1] - p[1])) / (dx * dy))
+      }
+    }
+    for (let v = 0; v < cols * rows; v++) {
+      largest = Math.max(largest, Math.abs(o[2 * v]) / dx, Math.abs(o[2 * v + 1]) / dy)
+      const c = v % cols, r = Math.floor(v / cols)
+      if (c === 0 || c === cols - 1) border = Math.max(border, Math.abs(o[2 * v]))
+      if (r === 0 || r === rows - 1) border = Math.max(border, Math.abs(o[2 * v + 1]))
+    }
+    check(offsetCalls === 80 && largest > 1 && smallest >= minAreaRatio - 1e-5 && border === 0 && offSurface < 1e-6,
+      `vertex motion moves vertices ${largest.toFixed(2)} cells, smallest face ${smallest.toFixed(3)} >= ${minAreaRatio}, border fixed, ${offSurface.toExponential(1)} m off the surface`)
+    opt.setTarget({ width: 64, height: 64, version: 2, values })
+    const enc = device.createCommandEncoder()
+    lens = opt.encodeStep(enc, { lens, optics, receiver }).lens
+    device.queue.submit([enc.finish()])
+    // Without a coarse grid the heights belong to the displaced vertices, so a
+    // new target keeps them and takes one ordinary step from there.
+    const restarted = await readBuffer(device, lens.offsetBuffer!, pull.byteLength)
+    const step = Math.max(...Array.from(restarted, (value, i) => Math.abs(value - o[i]) / (i % 2 ? dy : dx)))
+    const kept = Math.max(...Array.from(restarted, (value, i) => Math.abs(value) / (i % 2 ? dy : dx)))
+    check(kept > 1 && step <= 0.3 + 1e-4,
+      `a new target keeps the displaced vertices (${kept.toFixed(2)} cells, first step ${step.toFixed(3)} cells)`)
+    opt.destroy(); toy.model.destroy(); input.lens.heightBuffer.destroy(); pullBuffer.destroy()
+  }
+
+  // 6. No backward -> null.
   const noBackward: ForwardModel = { encode: () => { throw new Error('x') }, destroy() {} }
   const flat = lensOf(heightsBuffer(device, new Float32Array(81)))
   const none = await createLensOptimizer(device, { lens: flat, optics, receiver }, noBackward)

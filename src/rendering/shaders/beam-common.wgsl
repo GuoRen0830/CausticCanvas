@@ -34,10 +34,12 @@ fn irradianceHeat(value: f32) -> vec4f {
 @group(0) @binding(4) var lighting: texture_2d<f32>;
 @group(1) @binding(0) var<storage, read> heights: array<f32>;
 @group(1) @binding(1) var<storage, read> beams: array<vec4f>;
+// Per-vertex XY displacement from the uniform grid, in meters.
+@group(1) @binding(2) var<storage, read> offsets: array<vec2f>;
 
 fn sourceVertex(id: u32) -> vec3f {
   let gridXY = vec2f(f32(id % frame.grid.x), f32(id / frame.grid.x));
-  let xy = (gridXY / vec2f(frame.grid - 1u) - 0.5) * frame.aperture;
+  let xy = (gridXY / vec2f(frame.grid - 1u) - 0.5) * frame.aperture + offsets[id];
   return vec3f(xy, heights[id]);
 }
 

@@ -18,7 +18,7 @@ export type OptimizerSettings = { [K in keyof typeof config.optimizer]: number }
 
 const LOSS_WORKGROUP = 256
 const VERTEX_WORKGROUP = 64
-const PARAMS_SIZE = 112
+const PARAMS_SIZE = 128
 
 // Total transmitted power P = incidentIrradiance * aperture area.
 export function incidentPower(input: ForwardInput): number {
@@ -66,7 +66,8 @@ function validateSettings(settings: OptimizerSettings) {
   ]
   const nonnegative = [settings.smoothnessWeight, settings.slopeWeight, settings.lossBlurSigma,
     settings.curvatureLengthScale, settings.gradientSmoothingSigma, settings.lossBlurFinalSigma,
-    settings.updateSmoothingSigma, settings.spillWeight, settings.creaseSlope]
+    settings.updateSmoothingSigma, settings.spillWeight, settings.creaseSlope,
+    settings.xyLearningRate, settings.xySmoothnessWeight, settings.xySmoothingSigma]
   const fractions = [settings.lossBlurAnnealFraction, settings.learningRateFloor]
   if (
     positive.some((value) => !Number.isFinite(value) || value <= 0) ||
@@ -82,7 +83,8 @@ function validateSettings(settings: OptimizerSettings) {
     !Number.isSafeInteger(settings.refineIterations) || settings.refineIterations < 1 ||
     !Number.isSafeInteger(settings.transportIterations) || settings.transportIterations < 1 ||
     !(settings.coarseLearningRate > 0) || !(settings.refineLearningRate > 0) ||
-    !(settings.refineLossBlurSigma >= 0)
+    !(settings.refineLossBlurSigma >= 0) ||
+    !(settings.minAreaRatio >= 0 && settings.minAreaRatio < 1)
   ) {
     throw new Error('Invalid optimizer settings.')
   }
@@ -198,6 +200,11 @@ function writeParams(
   view.setFloat32(96, settings.lossBlurFinalSigma, true)
   view.setFloat32(100, settings.updateSmoothingSigma, true)
   view.setFloat32(104, settings.creaseSlope, true)
+  view.setFloat32(108, settings.xyLearningRate, true)
+  view.setFloat32(112, settings.xySmoothnessWeight, true)
+  view.setFloat32(116, settings.minAreaRatio, true)
+  view.setFloat32(120, settings.xySmoothingSigma, true)
+  view.setFloat32(124, settings.xyTangential, true)
   return data
 }
 
@@ -278,6 +285,16 @@ export async function createLensOptimizer(
       : settings
     device.queue.writeBuffer(params, 0, writeParams(initial, fineSettings))
 
+    // Vertex motion (x/y displacement of each vertex). Without it the offsets
+    // stay zero and only place the slope penalty on the actual faces.
+    const motion = fineSettings.xyLearningRate > 0
+    const offsets = createBuffer('Lens vertex offsets', vertexCount * 8, storage)
+    const motionBuffer = (label: string, bytes: number) => createBuffer(label, motion ? vertexCount * bytes : 16, storage)
+    const offsetGradient = motionBuffer('Lens offset gradient', 8)
+    const offsetMoments = motionBuffer('Offset Adam moments', 16)
+    const proposal = motionBuffer('Proposed lens offsets', 16)
+    const scratch = motionBuffer('Lens offset scratch', 8)
+
     const visibility = GPUShaderStage.COMPUTE
     const storageEntry = (binding: number, type: GPUBufferBindingType) => ({
       binding,
@@ -320,6 +337,14 @@ export async function createLensOptimizer(
         storageEntry(6, 'storage'),
         storageEntry(7, 'storage'),
         storageEntry(8, 'storage'),
+        storageEntry(12, 'storage'),
+      ],
+    })
+    const motionLayout = device.createBindGroupLayout({
+      label: 'Optimizer vertex motion layout',
+      entries: [
+        { binding: 0, visibility, buffer: { type: 'uniform' } },
+        ...[4, 5, 8, 12, 13, 14, 15, 16].map(binding => storageEntry(binding, 'storage')),
       ],
     })
 
@@ -346,6 +371,13 @@ export async function createLensOptimizer(
       smoothUpdateX,
       applySmoothUpdateY,
       advanceStep,
+      tangentialGradient,
+      blurOffsetGradientX,
+      blurOffsetGradientY,
+      offsetCurvature,
+      proposeOffsets,
+      acceptOffsets,
+      commitOffsets,
     ] = await Promise.all([
       pipeline('lossFromBuffer', [lossLayout, causticLayouts.buffer]),
       pipeline('lossFromTexture', [lossLayout, causticLayouts.texture]),
@@ -362,6 +394,8 @@ export async function createLensOptimizer(
       pipeline('smoothUpdateX', [updateLayout]),
       pipeline('applySmoothUpdateY', [updateLayout]),
       pipeline('advanceStep', [updateLayout]),
+      ...['tangentialGradient', 'blurOffsetGradientX', 'blurOffsetGradientY', 'offsetCurvature', 'proposeOffsets',
+        'acceptOffsets', 'commitOffsets'].map(entryPoint => pipeline(entryPoint, [motionLayout])),
     ])
 
     const lossBindings = device.createBindGroup({
@@ -388,6 +422,16 @@ export async function createLensOptimizer(
         { binding: 6, resource: { buffer: curvature } },
         { binding: 7, resource: { buffer: moments } },
         { binding: 8, resource: { buffer: stepState } },
+        { binding: 12, resource: { buffer: offsets } },
+      ],
+    })
+    const motionBindings = device.createBindGroup({
+      label: 'Optimizer vertex motion bindings',
+      layout: motionLayout,
+      entries: [
+        { binding: 0, resource: { buffer: params } },
+        ...([[4, heights], [5, heightGradient], [8, stepState], [12, offsets], [13, offsetGradient], [14, offsetMoments],
+          [15, proposal], [16, scratch]] as const).map(([binding, buffer]) => ({ binding, resource: { buffer } })),
       ],
     })
 
@@ -437,7 +481,7 @@ export async function createLensOptimizer(
       const inner = await createLensOptimizer(device,
         { lens: coarseLens, optics: initial.optics, receiver }, options.coarseForward,
         { ...settings, coarseGridCells: 0, maxIterations: settings.coarseIterations,
-          learningRate: settings.coarseLearningRate, lossLogInterval: 0 })
+          learningRate: settings.coarseLearningRate, lossLogInterval: 0, xyLearningRate: 0 })
       if (!inner) throw new Error('Coarse optimizer could not be created.')
       const transferParams = createBuffer('Multigrid transfer', 32, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST)
       device.queue.writeBuffer(transferParams, 0, new Uint32Array([
@@ -474,6 +518,8 @@ export async function createLensOptimizer(
       }
     }
     let coarsePhase = false
+    // The offsets buffer starts zeroed; track it to avoid clearing it every step.
+    let offsetsZero = true
 
     let targetVersion: number | null = null
     let active = false
@@ -514,10 +560,10 @@ export async function createLensOptimizer(
       readonly lossHistory: typeof lossHistory
       // Read-only diagnostics for check pages: the last combined height
       // gradient and the Adam moments (m, v) per vertex.
-      readonly diagnostics: { heightGradient: GPUBuffer, moments: GPUBuffer }
+      readonly diagnostics: { heightGradient: GPUBuffer, moments: GPUBuffer, offsets: GPUBuffer }
     } = {
       lossHistory,
-      diagnostics: { heightGradient, moments },
+      diagnostics: { heightGradient, moments, offsets },
 
       setTarget(target) {
         if (destroyed) return
@@ -574,11 +620,30 @@ export async function createLensOptimizer(
         if (input.lens.heightBuffer !== heights) {
           encoder.copyBufferToBuffer(input.lens.heightBuffer, 0, heights, 0, vertexCount * 4)
         }
-        const lens: LensState = { ...input.lens, heightBuffer: heights }
+        if (input.lens.offsetBuffer && input.lens.offsetBuffer !== offsets) {
+          encoder.copyBufferToBuffer(input.lens.offsetBuffer, 0, offsets, 0, vertexCount * 8)
+          offsetsZero = false
+        } else if (!input.lens.offsetBuffer && !offsetsZero) {
+          encoder.clearBuffer(offsets)
+          offsetsZero = true
+        }
+        // Without vertex motion the caller's offsets (if any) pass through unchanged.
+        const lens: LensState = motion ? { ...input.lens, heightBuffer: heights, offsetBuffer: offsets }
+          : { ...input.lens, heightBuffer: heights }
         if (resetPending) {
           // New target: restart Adam from the current lens shape.
           encoder.clearBuffer(moments)
           encoder.clearBuffer(stepState)
+          if (motion) {
+            encoder.clearBuffer(offsetMoments)
+            // The coarse grid has no offsets and its prolongation rewrites the
+            // fine heights on the uniform grid. Without it, the warm start keeps
+            // the displaced mesh, since the heights belong to those positions.
+            if (coarse) {
+              encoder.clearBuffer(offsets)
+              offsetsZero = true
+            }
+          }
           resetPending = false
           if (coarse && coarse.initialPending) {
             // Start the coarse grid from the global transport solution.
@@ -640,8 +705,9 @@ export async function createLensOptimizer(
         }
         filterPass.end()
 
-        // Optical vector-Jacobian product overwrites heightGradient.
-        forward.encodeBackward!(encoder, stepInput, result, pixelGradient, heightGradient)
+        // Optical vector-Jacobian product overwrites heightGradient (and offsetGradient).
+        forward.encodeBackward!(encoder, stepInput, result, pixelGradient, heightGradient,
+          motion ? offsetGradient : undefined)
 
         const updatePass = encoder.beginComputePass({ label: 'Optimizer update', timestampWrites: options.timestamps?.('update') })
         updatePass.setBindGroup(0, updateBindings)
@@ -663,6 +729,18 @@ export async function createLensOptimizer(
         } else {
           updatePass.setPipeline(adamUpdate)
           updatePass.dispatchWorkgroups(...vertexGrid)
+        }
+        if (motion) {
+          updatePass.setBindGroup(0, motionBindings)
+          const stages = [offsetCurvature, proposeOffsets, acceptOffsets, commitOffsets]
+          if (settings.xySmoothingSigma > 0) stages.unshift(blurOffsetGradientX, blurOffsetGradientY)
+          stages.unshift(tangentialGradient)
+          for (const stage of stages) {
+            updatePass.setPipeline(stage)
+            updatePass.dispatchWorkgroups(...vertexGrid)
+          }
+          updatePass.setBindGroup(0, updateBindings)
+          offsetsZero = false
         }
         updatePass.setPipeline(advanceStep)
         updatePass.dispatchWorkgroups(1)

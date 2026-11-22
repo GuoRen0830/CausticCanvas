@@ -6,7 +6,7 @@ async function run() {
  const residual=Float32Array.from({length:n},(_,i)=>Math.sin(i*.7)+.2)
  const make=(size:number,uniform=false)=>device.createBuffer({size,usage:(uniform?GPUBufferUsage.UNIFORM:GPUBufferUsage.STORAGE)|GPUBufferUsage.COPY_DST|GPUBufferUsage.COPY_SRC})
  // spill stays zero (the spill penalty off), so the gradient is the filter's alone.
- const params=make(112,true),state=make(16),input=make(n*4),a=make(n*4),b=make(n*4),spill=make(n*4)
+ const params=make(128,true),state=make(16),input=make(n*4),a=make(n*4),b=make(n*4),spill=make(n*4)
  const entries=[{binding:0,visibility:GPUShaderStage.COMPUTE,buffer:{type:'uniform' as const}},...[2,8,9,10].map(binding=>({binding,visibility:GPUShaderStage.COMPUTE,buffer:{type:'storage' as const}})),{binding:11,visibility:GPUShaderStage.COMPUTE,buffer:{type:'read-only-storage' as const}}]
  const layout=device.createBindGroupLayout({entries})
  const group=device.createBindGroup({layout,entries:[{binding:0,resource:{buffer:params}},{binding:2,resource:{buffer:input}},{binding:8,resource:{buffer:state}},{binding:9,resource:{buffer:a}},{binding:10,resource:{buffer:b}},{binding:11,resource:{buffer:spill}}]})
@@ -14,7 +14,7 @@ async function run() {
  const pipelines=await Promise.all(['filterResidualX','filterResidualY','filterGradientY','filterGradientX'].map(entryPoint=>device.createComputePipelineAsync({layout:device.createPipelineLayout({bindGroupLayouts:[layout]}),compute:{module,entryPoint}})))
  const results=[]
  for(const sigma of [0,1.5,4]) {
- const data=new ArrayBuffer(112),view=new DataView(data);view.setUint32(8,width,true);view.setUint32(12,height,true);view.setFloat32(24,1,true);view.setFloat32(28,scale,true);view.setUint32(72,3000,true);view.setFloat32(76,sigma,true);view.setFloat32(80,.8,true);view.setFloat32(84,.05,true)
+ const data=new ArrayBuffer(128),view=new DataView(data);view.setUint32(8,width,true);view.setUint32(12,height,true);view.setFloat32(24,1,true);view.setFloat32(28,scale,true);view.setUint32(72,3000,true);view.setFloat32(76,sigma,true);view.setFloat32(80,.8,true);view.setFloat32(84,.05,true)
  device.queue.writeBuffer(params,0,data);device.queue.writeBuffer(input,0,residual)
  const dst=device.createBuffer({size:n*4,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST})
  const enc=device.createCommandEncoder(),pass=enc.beginComputePass();pass.setBindGroup(0,group);for(const p of pipelines){pass.setPipeline(p);pass.dispatchWorkgroups(1)}pass.end();enc.copyBufferToBuffer(input,0,dst,0,n*4);device.queue.submit([enc.finish()]);await dst.mapAsync(GPUMapMode.READ)

@@ -99,6 +99,9 @@ async function run() {
   check(optimized.every(v=>Number.isFinite(v)&&v>=config.optimizer.minHeight-1e-9),'optimized heights remain finite and thick enough')
   check(optimized.some(v=>Math.abs(v-config.lens.thickness)>1e-5),'lens actually changes')
   check((await read(initialLens.heightBuffer,optimized.length)).every(v=>Math.abs(v-config.lens.thickness)<1e-8),'borrowed initial heights unchanged')
+  // With vertex motion the heights belong to displaced vertex positions.
+  const vertices = optimized.length
+  const optimizedOffsets = state.lens.offsetBuffer ? await read(state.lens.offsetBuffer,2*vertices) : null
   optimizer.setTarget(target)
   e = device.createCommandEncoder()
   const finished = optimizer.encodeStep(e,state)
@@ -109,28 +112,77 @@ async function run() {
   device.queue.submit([e.finish()])
   check(empty.done,'empty target stops optimization')
   check((await read(state.lens.heightBuffer,optimized.length)).every((v,i)=>v===optimized[i]),'empty target preserves lens')
+  if (optimizedOffsets) {
+    check((await read(state.lens.offsetBuffer!,2*vertices)).every((v,i)=>v===optimizedOffsets[i]),'empty target preserves vertex positions')
+  }
   optimizer.setTarget({...target,version:2})
   e = device.createCommandEncoder()
   const restarted = simulation.encode(e,1)
   device.queue.submit([e.finish()])
   check(!restarted.done,'new version restarts optimization')
   const warm = await read(state.lens.heightBuffer,optimized.length)
-  check(warm.every((v,i)=>Math.abs(v-optimized[i])<config.optimizer.learningRate*1.1),'new target warm-starts from current lens')
+  // Each height moves by at most one Adam step. A vertex that slides along the
+  // surface also follows its slope in height; the optimizer takes that slope
+  // after the height step, so neighbor steps of up to 1.1 learningRate may
+  // change the slide by the slope's sensitivity to them.
+  const learningRate = config.optimizer.learningRate
+  let expected = optimized
+  let tolerance = (_: number) => learningRate*1.1
+  if (optimizedOffsets) {
+    const moved = await read(state.lens.offsetBuffer!,2*vertices)
+    const { columns, rows } = state.lens
+    const dx = state.lens.sizeX/(columns-1), dy = state.lens.sizeY/(rows-1)
+    const xyStep = config.optimizer.xyLearningRate*1.1
+    check(moved.every((v,i)=>Math.abs(v-optimizedOffsets[i])<=xyStep*(i%2===0 ? dx : dy)),'new target keeps the displaced vertices')
+    if (config.optimizer.xyTangential > 0) {
+      const slides = Array.from(optimized,(_,v)=>tangentialSlide(optimized,optimizedOffsets,moved,columns,rows,dx,dy,v))
+      expected = optimized.map((h,v)=>Math.max(h+slides[v].height,config.optimizer.minHeight))
+      tolerance = v => learningRate*(1.1+2.2*slides[v].sensitivity)
+    }
+  }
+  let worst = 0, worstVertex = 0
+  warm.forEach((v,i)=>{
+    const ratio = Math.abs(v-expected[i])/tolerance(i)
+    if (ratio > worst) { worst = ratio; worstVertex = i }
+  })
+  check(worst < 1,`new target warm-starts from current lens (worst vertex ${worstVertex}: off by ${Math.abs(warm[worstVertex]-expected[worstVertex]).toExponential(2)} m, tolerance ${tolerance(worstVertex).toExponential(2)} m)`)
   // A running batch displays the forward pass its last step already evaluated,
   // i.e. the heights before that update, instead of tracing the scene again.
   const previous = await measure(restarted.result)
   const before = device.createBuffer({ size: optimized.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
   device.queue.writeBuffer(before, 0, optimized)
   e = device.createCommandEncoder()
-  const repeated = forward.encode(e,{ ...state, lens: { ...state.lens, heightBuffer: before } })
+  const beforeOffsets = optimizedOffsets ? device.createBuffer({ size: optimizedOffsets.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }) : undefined
+  if (beforeOffsets) device.queue.writeBuffer(beforeOffsets, 0, optimizedOffsets!)
+  const repeated = forward.encode(e,{ ...state, lens: { ...state.lens, heightBuffer: before, offsetBuffer: beforeOffsets } })
   device.queue.submit([e.finish()])
   check(Math.abs((await measure(repeated))-previous)<1e-6,'running preview reuses the step forward of the pre-update heights')
   before.destroy()
+  beforeOffsets?.destroy()
   await device.queue.onSubmittedWorkDone()
   check(errors.length===0,`no GPU validation errors: ${errors.join('; ')}`)
   say('ALL PASSED')
   ;(window as any).integrationResult = {passed:true,initialLoss,finalLoss,losses,steps,wallMs:performance.now()-start,adapter:{vendor:adapter.info.vendor,architecture:adapter.info.architecture},log}
   optimizer.destroy();forward.destroy();initialLens.heightBuffer.destroy();device.destroy()
+}
+// The optimizer's tangential slide of vertex v by its x/y step: the slope from
+// central differences between displaced neighbors (displacedSlope in
+// optimizer.wgsl) dotted with the step, written as c1 * (h[xp] - h[xm]) +
+// c2 * (h[yp] - h[ym]). sensitivity = |c1| + |c2| bounds how much changes of
+// those height differences change the slide.
+function tangentialSlide(heights: Float32Array, offsets: Float32Array, moved: Float32Array,
+  columns: number, rows: number, dx: number, dy: number, v: number) {
+  const column = v%columns, row = Math.floor(v/columns)
+  const xm = column===0 ? v : v-1, xp = column+1===columns ? v : v+1
+  const ym = row===0 ? v : v-columns, yp = row+1===rows ? v : v+columns
+  const position = (i: number) => [(i%columns)*dx+offsets[2*i], Math.floor(i/columns)*dy+offsets[2*i+1]]
+  const [ax,ay] = position(xm), [bx,by] = position(xp), [cx,cy] = position(ym), [ex,ey] = position(yp)
+  const e1x = bx-ax, e1y = by-ay, e2x = ex-cx, e2y = ey-cy
+  const determinant = e1x*e2y-e1y*e2x
+  const sx = moved[2*v]-offsets[2*v], sy = moved[2*v+1]-offsets[2*v+1]
+  if (!(Math.abs(determinant) > 0)) return { height: 0, sensitivity: 0 }
+  const c1 = (e2y*sx-e2x*sy)/determinant, c2 = (e1x*sy-e1y*sx)/determinant
+  return { height: c1*(heights[xp]-heights[xm])+c2*(heights[yp]-heights[ym]), sensitivity: Math.abs(c1)+Math.abs(c2) }
 }
 run().catch(error=>{
   say(`FAIL ${error.stack}`)

@@ -68,6 +68,24 @@ export const config = {
     spillWeight: 0.02,
     // Gaussian width in lens meters for blurring each Adam step; 0 disables.
     updateSmoothingSigma: 0,
+    // Vertex motion during the fine refinement: vertices also slide in x and y,
+    // so they can gather at the seams between regions of the lens that light
+    // different strokes. A face straddling a seam lands between the strokes;
+    // gathering vertices there shrinks such faces and the light they spill.
+    // Adam step in vertex spacings per iteration; 0 keeps the uniform grid.
+    xyLearningRate: 0.02,
+    // Weight of the mean squared Laplacian of the x/y displacement in vertex
+    // spacings, which keeps the mesh from wrinkling.
+    xySmoothnessWeight: 0.1,
+    // No face may shrink below this fraction of its grid area, so faces never fold.
+    minAreaRatio: 0.02,
+    // Gaussian width in lens meters for blurring the x/y gradient (stops at
+    // creases like the height gradient blur); 0 disables.
+    xySmoothingSigma: 0.0015,
+    // 1: a moving vertex keeps to the current surface (its height follows the
+    // local slope), so x/y motion redistributes faces without reshaping the
+    // lens; 0: heights stay put and every x/y step also tilts the faces.
+    xyTangential: 1,
     // Coarse-to-fine: first optimize a grid with this many cells per side (it
     // must divide the fine cell count; 0 disables), then interpolate it onto
     // the fine grid and refine it for refineIterations steps at

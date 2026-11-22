@@ -36,6 +36,16 @@ struct Params {
   updateSigma: f32,
   // Slope difference that stops the gradient blur at a crease (0 = plain Gaussian).
   creaseSlope: f32,
+  // Vertex motion: Adam step in vertex spacings (0 = fixed grid), weight of the
+  // x/y Laplacian, smallest face area as a fraction of its grid area, and the
+  // x/y gradient blur width in meters.
+  xyLearningRate: f32,
+  xySmoothnessWeight: f32,
+  minAreaRatio: f32,
+  xySigma: f32,
+  // 1: a moving vertex stays on the current surface (its height follows the
+  // local slope), so x/y motion only redistributes faces; 0: heights stay put.
+  xyTangential: f32,
 }
 
 struct StepState {
@@ -64,6 +74,15 @@ struct StepState {
 @group(0) @binding(8) var<storage, read_write> state: StepState;
 @group(0) @binding(9) var<storage, read_write> filterA: array<f32>;
 @group(0) @binding(10) var<storage, read_write> filterB: array<f32>;
+
+// Vertex-motion bindings: x/y displacement from the grid in meters, its
+// gradient, Adam moments (m.xy, v.xy), a proposed displacement (xy) with the
+// surface slope at the vertex (zw), and scratch.
+@group(0) @binding(12) var<storage, read_write> offsets: array<vec2<f32>>;
+@group(0) @binding(13) var<storage, read_write> offsetGradient: array<vec2<f32>>;
+@group(0) @binding(14) var<storage, read_write> offsetMoments: array<vec4<f32>>;
+@group(0) @binding(15) var<storage, read_write> proposal: array<vec4<f32>>;
+@group(0) @binding(16) var<storage, read_write> scratch: array<vec2<f32>>;
 
 const LOSS_WORKGROUP = 256u;
 var<workgroup> partialSums: array<f32, LOSS_WORKGROUP>;
@@ -255,7 +274,13 @@ fn smoothGradientY(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgr
 }
 
 // Dimensionless curvature: discrete Laplacian times curvatureScale.
-// Boundary vertices have no curvature term.
+// Boundary vertices have no curvature term. With vertex motion the grid is no
+// longer uniform, so the part of the Laplacian that a plane through the vertex
+// would produce (slope . Laplacian of the positions) is removed: a plane costs
+// nothing however its vertices are spaced, while a crease still costs the same
+// per vertex, so gathering vertices at a crease lets it be physically sharper.
+// On the uniform grid the correction is zero. Its slope is treated as fixed in
+// the gradient.
 @compute @workgroup_size(64)
 fn computeCurvature(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
   let vertex = id.x + id.y * groups.x * 64u;
@@ -275,9 +300,15 @@ fn computeCurvature(@builtin(global_invocation_id) id: vec3u, @builtin(num_workg
   let h = heights[vertex];
   let dx2 = params.spacing.x * params.spacing.x;
   let dy2 = params.spacing.y * params.spacing.y;
-  let laplacian =
+  let w = params.gridSize.x;
+  var laplacian =
     (heights[vertex - 1u] + heights[vertex + 1u] - 2.0 * h) / dx2 +
-    (heights[vertex - params.gridSize.x] + heights[vertex + params.gridSize.x] - 2.0 * h) / dy2;
+    (heights[vertex - w] + heights[vertex + w] - 2.0 * h) / dy2;
+  let spread = (offsets[vertex - 1u] + offsets[vertex + 1u] - 2.0 * offsets[vertex]) / dx2 +
+    (offsets[vertex - w] + offsets[vertex + w] - 2.0 * offsets[vertex]) / dy2;
+  if (any(spread != vec2<f32>(0.0))) {
+    laplacian -= dot(displacedSlope(vertex), spread);
+  }
   curvature[vertex] = laplacian * params.curvatureScale;
 }
 
@@ -292,38 +323,39 @@ fn slopePenaltyGradient(gx: f32, gy: f32) -> vec2<f32> {
   return vec2<f32>(gx, gy) * scale;
 }
 
-// Slope-penalty gradient for the vertex at local corner (lx, ly) of a cell.
-// Corners: a = (0, 0), b = (1, 0), c = (0, 1), d = (1, 1).
-// Faces follow buildLensIndices: (a, b, c) and (b, d, c).
-fn cellSlopeGradient(cellColumn: u32, cellRow: u32, lx: u32, ly: u32) -> f32 {
-  let a = vertexIndex(cellColumn, cellRow);
-  let ha = heights[a];
-  let hb = heights[a + 1u];
-  let hc = heights[a + params.gridSize.x];
-  let hd = heights[a + params.gridSize.x + 1u];
-  let invDx = 1.0 / params.spacing.x;
-  let invDy = 1.0 / params.spacing.y;
+// Vertex position in the lens plane, relative to the first vertex, including
+// its x/y displacement.
+fn position(vertex: u32) -> vec2<f32> {
+  let grid = vec2<f32>(f32(vertex % params.gridSize.x), f32(vertex / params.gridSize.x));
+  return grid * params.spacing + offsets[vertex];
+}
 
-  // Face (a, b, c): gx = (hb - ha) / dx, gy = (hc - ha) / dy.
-  let first = slopePenaltyGradient((hb - ha) * invDx, (hc - ha) * invDy);
-  // Face (b, d, c): gx = (hd - hc) / dx, gy = (hd - hb) / dy.
-  let second = slopePenaltyGradient((hd - hc) * invDx, (hd - hb) * invDy);
-
-  let corner = ly * 2u + lx;
-  switch corner {
-    case 0u: {
-      return -first.x * invDx - first.y * invDy;
-    }
-    case 1u: {
-      return first.x * invDx - second.y * invDy;
-    }
-    case 2u: {
-      return first.y * invDy - second.x * invDx;
-    }
-    default: {
-      return second.x * invDx + second.y * invDy;
-    }
+// Slope-penalty gradient with respect to the height of corner j of a face.
+// The face's height gradient g = sum_i h_i * grad(phi_i), with the linear
+// basis functions phi_i of the displaced triangle.
+fn faceSlopeGradient(ids: vec3<u32>, j: u32) -> f32 {
+  let a = position(ids.x);
+  let b = position(ids.y);
+  let c = position(ids.z);
+  let doubleArea = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+  if (!(doubleArea > 0.0)) {
+    return 0.0;
   }
+  // grad(phi_i) = perpendicular of the opposite edge / doubleArea.
+  var basis = array<vec2<f32>, 3>(
+    vec2<f32>(b.y - c.y, c.x - b.x),
+    vec2<f32>(c.y - a.y, a.x - c.x),
+    vec2<f32>(a.y - b.y, b.x - a.x),
+  );
+  let g = (heights[ids.x] * basis[0] + heights[ids.y] * basis[1] + heights[ids.z] * basis[2]) / doubleArea;
+  return dot(slopePenaltyGradient(g.x, g.y), basis[j] / doubleArea);
+}
+
+// Faces follow buildLensIndices: (a, b, c) and (b, d, c) per cell.
+fn cellFaces(cellColumn: u32, cellRow: u32) -> array<vec3<u32>, 2> {
+  let a = vertexIndex(cellColumn, cellRow);
+  let w = params.gridSize.x;
+  return array<vec3<u32>, 2>(vec3<u32>(a, a + 1u, a + w), vec3<u32>(a + 1u, a + w + 1u, a + w));
 }
 
 // Add regularization gradients to the optical gradient written by the forward model.
@@ -349,14 +381,19 @@ fn addRegularization(@builtin(global_invocation_id) id: vec3u, @builtin(num_work
   var gradient = 2.0 * params.smoothnessWeight * params.invVertexCount *
     params.curvatureScale * curvatureSum;
 
-  // Slope limit: gather from the up to four cells sharing this vertex.
+  // Slope limit: gather from the faces of the up to four cells sharing this vertex.
   for (var dy = 0u; dy < 2u; dy++) {
     for (var dx = 0u; dx < 2u; dx++) {
       if (column >= dx && row >= dy) {
         let cellColumn = column - dx;
         let cellRow = row - dy;
         if (cellColumn + 1u < columns && cellRow + 1u < rows) {
-          gradient += cellSlopeGradient(cellColumn, cellRow, dx, dy);
+          var faces = cellFaces(cellColumn, cellRow);
+          for (var f = 0u; f < 2u; f++) {
+            for (var j = 0u; j < 3u; j++) {
+              if (faces[f][j] == vertex) { gradient += faceSlopeGradient(faces[f], j); }
+            }
+          }
         }
       }
     }
@@ -428,4 +465,205 @@ fn applySmoothUpdateY(@builtin(global_invocation_id) id: vec3u, @builtin(num_wor
 @compute @workgroup_size(1)
 fn advanceStep() {
   state.step += 1u;
+}
+
+// ---- Vertex motion -------------------------------------------------------
+
+// Bilateral Gaussian along one axis of the x/y gradient (source 0) or of the
+// scratch buffer (source 1), stopping at creases like smoothedGradient.
+fn blurOffsets(vertex: u32, axis: u32, source: u32) -> vec2<f32> {
+  let coordinate = vec2<i32>(i32(vertex % params.gridSize.x), i32(vertex / params.gridSize.x));
+  let sigma = params.xySigma / params.spacing[axis];
+  let radius = i32(ceil(3.0 * sigma));
+  let size = vec2<i32>(params.gridSize);
+  var center = vec2<f32>(0.0);
+  if (params.creaseSlope > 0.0) { center = vertexSlope(coordinate); }
+  var sum = vec2<f32>(0.0);
+  var weightSum = 0.0;
+  for (var offset = -radius; offset <= radius; offset++) {
+    var q = coordinate;
+    q[axis] += offset;
+    if (q[axis] < 0 || q[axis] >= size[axis]) { continue; }
+    var weight = exp(-0.5 * f32(offset * offset) / max(sigma * sigma, 1e-8));
+    if (params.creaseSlope > 0.0) {
+      let difference = (vertexSlope(q) - center) / params.creaseSlope;
+      weight *= exp(-dot(difference, difference));
+    }
+    let i = u32(q.y) * params.gridSize.x + u32(q.x);
+    var value = scratch[i];
+    if (source == 0u) { value = offsetGradient[i]; }
+    sum += weight * vec2<f32>(finiteGradient(value.x), finiteGradient(value.y));
+    weightSum += weight;
+  }
+  return sum / weightSum;
+}
+
+fn motionVertex(id: vec3u, groups: vec3u) -> u32 {
+  return id.x + id.y * groups.x * 64u;
+}
+
+// Surface slope at a vertex from central differences over the displaced
+// positions (one-sided at the border): the slope s with s . e = dh along both
+// grid directions, exact for a plane however the vertices are displaced.
+fn displacedSlope(vertex: u32) -> vec2<f32> {
+  let w = params.gridSize.x;
+  let column = vertex % w;
+  let row = vertex / w;
+  let xm = select(vertex - 1u, vertex, column == 0u);
+  let xp = select(vertex + 1u, vertex, column + 1u == w);
+  let ym = select(vertex - w, vertex, row == 0u);
+  let yp = select(vertex + w, vertex, row + 1u == params.gridSize.y);
+  let e1 = position(xp) - position(xm);
+  let e2 = position(yp) - position(ym);
+  let h1 = heights[xp] - heights[xm];
+  let h2 = heights[yp] - heights[ym];
+  let determinant = e1.x * e2.y - e1.y * e2.x;
+  if (!(abs(determinant) > 0.0)) { return vec2<f32>(0.0); }
+  return vec2<f32>(h1 * e2.y - h2 * e1.y, e1.x * h2 - e2.x * h1) / determinant;
+}
+
+// With xyTangential, a step d in x/y also raises the vertex by slope . d, so
+// dL/d(step) = dL/d(xy) + dL/dh * slope. Runs after the height update, while
+// heightGradient still holds the full height gradient.
+@compute @workgroup_size(64)
+fn tangentialGradient(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = motionVertex(id, groups);
+  if (vertex >= params.gridSize.x * params.gridSize.y) { return; }
+  let optical = offsetGradient[vertex];
+  var g = vec2<f32>(finiteGradient(optical.x), finiteGradient(optical.y));
+  if (params.xyTangential > 0.0) {
+    let slope = displacedSlope(vertex);
+    g += finiteGradient(heightGradient[vertex]) * vec2<f32>(finiteGradient(slope.x), finiteGradient(slope.y));
+  }
+  offsetGradient[vertex] = g;
+}
+
+@compute @workgroup_size(64)
+fn blurOffsetGradientX(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = motionVertex(id, groups);
+  if (vertex >= params.gridSize.x * params.gridSize.y) { return; }
+  scratch[vertex] = blurOffsets(vertex, 0u, 0u);
+}
+
+@compute @workgroup_size(64)
+fn blurOffsetGradientY(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = motionVertex(id, groups);
+  if (vertex >= params.gridSize.x * params.gridSize.y) { return; }
+  offsetGradient[vertex] = blurOffsets(vertex, 1u, 1u);
+}
+
+// Discrete Laplacian of the displacement in vertex spacings; zero on the border.
+@compute @workgroup_size(64)
+fn offsetCurvature(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = motionVertex(id, groups);
+  let columns = params.gridSize.x;
+  let rows = params.gridSize.y;
+  if (vertex >= columns * rows) { return; }
+  let column = vertex % columns;
+  let row = vertex / columns;
+  if (column == 0u || row == 0u || column + 1u == columns || row + 1u == rows) {
+    scratch[vertex] = vec2<f32>(0.0);
+    return;
+  }
+  let sum = offsets[vertex - 1u] + offsets[vertex + 1u] + offsets[vertex - columns] + offsets[vertex + columns];
+  scratch[vertex] = (sum - 4.0 * offsets[vertex]) / params.spacing;
+}
+
+// Adam on the displacement: proposal = offsets - step. Border vertices only
+// slide along their edge of the aperture.
+@compute @workgroup_size(64)
+fn proposeOffsets(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = motionVertex(id, groups);
+  let columns = params.gridSize.x;
+  let rows = params.gridSize.y;
+  if (vertex >= columns * rows) { return; }
+  let column = vertex % columns;
+  let row = vertex / columns;
+
+  // Smoothness: L = w / N * sum(|q|^2), q = laplacian(offsets) / spacing.
+  var laplacianSum = -4.0 * scratch[vertex];
+  if (column > 0u) { laplacianSum += scratch[vertex - 1u]; }
+  if (column + 1u < columns) { laplacianSum += scratch[vertex + 1u]; }
+  if (row > 0u) { laplacianSum += scratch[vertex - columns]; }
+  if (row + 1u < rows) { laplacianSum += scratch[vertex + columns]; }
+  let optical = offsetGradient[vertex];
+  var g = vec2<f32>(finiteGradient(optical.x), finiteGradient(optical.y)) +
+    2.0 * params.xySmoothnessWeight * params.invVertexCount * laplacianSum / params.spacing;
+  var movable = vec2<f32>(1.0);
+  if (column == 0u || column + 1u == columns) { movable.x = 0.0; }
+  if (row == 0u || row + 1u == rows) { movable.y = 0.0; }
+  g *= movable;
+
+  let t = f32(state.step + 1u);
+  let previous = offsetMoments[vertex];
+  let m = params.beta1 * previous.xy + (1.0 - params.beta1) * g;
+  let v = params.beta2 * previous.zw + (1.0 - params.beta2) * g * g;
+  offsetMoments[vertex] = vec4<f32>(m, v);
+  let mHat = m / (1.0 - pow(params.beta1, t));
+  let vHat = v / (1.0 - pow(params.beta2, t));
+  let remaining = max(0.0, 1.0 - t / f32(params.maxIterations));
+  let rateFloor = params.learningRateFloor;
+  let rate = params.xyLearningRate * params.spacing * (rateFloor + (1.0 - rateFloor) * remaining * remaining);
+  let slope = displacedSlope(vertex);
+  proposal[vertex] = vec4<f32>((offsets[vertex] - rate * mHat / (sqrt(vHat) + params.epsilon)) * movable,
+    finiteGradient(slope.x), finiteGradient(slope.y));
+}
+
+// Area of a face as a fraction of its grid area.
+fn areaRatio(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>) -> f32 {
+  let doubleArea = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+  return doubleArea / (params.spacing.x * params.spacing.y);
+}
+
+fn grid(vertex: u32) -> vec2<f32> {
+  return vec2<f32>(f32(vertex % params.gridSize.x), f32(vertex / params.gridSize.x)) * params.spacing;
+}
+
+// Accept a vertex's proposal only if every face around it keeps at least
+// minAreaRatio of its grid area whether each neighbor moves or stays. Then
+// any mix of accepted and rejected moves leaves every face valid.
+@compute @workgroup_size(64)
+fn acceptOffsets(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = motionVertex(id, groups);
+  let columns = params.gridSize.x;
+  let rows = params.gridSize.y;
+  if (vertex >= columns * rows) { return; }
+  let column = vertex % columns;
+  let row = vertex / columns;
+  var valid = true;
+  for (var dy = 0u; dy < 2u; dy++) {
+    for (var dx = 0u; dx < 2u; dx++) {
+      if (column < dx || row < dy) { continue; }
+      let cellColumn = column - dx;
+      let cellRow = row - dy;
+      if (cellColumn + 1u >= columns || cellRow + 1u >= rows) { continue; }
+      var faces = cellFaces(cellColumn, cellRow);
+      for (var f = 0u; f < 2u; f++) {
+        let ids = faces[f];
+        if (ids.x != vertex && ids.y != vertex && ids.z != vertex) { continue; }
+        for (var combo = 0u; combo < 8u; combo++) {
+          var p: array<vec2<f32>, 3>;
+          for (var k = 0u; k < 3u; k++) {
+            let moved = ids[k] == vertex || ((combo >> k) & 1u) == 1u;
+            p[k] = grid(ids[k]) + select(offsets[ids[k]], proposal[ids[k]].xy, moved);
+          }
+          if (!(areaRatio(p[0], p[1], p[2]) >= params.minAreaRatio)) { valid = false; }
+        }
+      }
+    }
+  }
+  scratch[vertex] = select(offsets[vertex], proposal[vertex].xy, valid);
+}
+
+// Each vertex writes only its own offset and height here, so no neighbor sees
+// a half-updated mesh.
+@compute @workgroup_size(64)
+fn commitOffsets(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) groups: vec3u) {
+  let vertex = motionVertex(id, groups);
+  if (vertex >= params.gridSize.x * params.gridSize.y) { return; }
+  if (params.xyTangential > 0.0) {
+    let step = scratch[vertex] - offsets[vertex];
+    heights[vertex] = max(heights[vertex] + dot(proposal[vertex].zw, step), params.minHeight);
+  }
+  offsets[vertex] = scratch[vertex];
 }

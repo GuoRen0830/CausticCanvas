@@ -108,8 +108,10 @@ export function createLensRenderer(
   const uniforms = createLensUniforms(device, initialLens, model, referenceHeight)
   const pipeline = createLensPipeline(device, format)
   const layout = pipeline.getBindGroupLayout(0)
-  const bindings = new WeakMap<GPUBuffer, GPUBindGroup>()
+  const bindings = new WeakMap<GPUBuffer, WeakMap<GPUBuffer, GPUBindGroup>>()
   const scans = new WeakMap<GPUBuffer, GPUBindGroup>()
+  // Lenses without vertex offsets read zeros.
+  const zeroOffsets = device.createBuffer({ label: 'Zero lens offsets', size: columns * rows * 8, usage: GPUBufferUsage.STORAGE })
   const partials = device.createBuffer({ label: 'Lens preview partial bounds', size: 256 * 8, usage: GPUBufferUsage.STORAGE })
   const bounds = device.createBuffer({ label: 'Lens preview bounds', size: 8, usage: GPUBufferUsage.STORAGE })
   const boundsModule = device.createShaderModule({ label: 'Lens preview framing', code: boundsShader })
@@ -119,8 +121,10 @@ export function createLensRenderer(
     { binding: 1, resource: { buffer: partials } }, { binding: 2, resource: { buffer: bounds } },
   ] })
 
-  const bindingsFor = (heightBuffer: GPUBuffer) => {
-    let group = bindings.get(heightBuffer)
+  const bindingsFor = (heightBuffer: GPUBuffer, offsetBuffer = zeroOffsets) => {
+    let byOffsets = bindings.get(heightBuffer)
+    if (!byOffsets) bindings.set(heightBuffer, byOffsets = new WeakMap())
+    let group = byOffsets.get(offsetBuffer)
 
     if (!group) {
       // Reuse bindings when the optimizer alternates height buffers.
@@ -137,10 +141,11 @@ export function createLensRenderer(
             resource: { buffer: heightBuffer, size: columns * rows * 4 },
           },
           { binding: 2, resource: { buffer: bounds } },
+          { binding: 3, resource: { buffer: offsetBuffer, size: columns * rows * 8 } },
         ],
       })
-      bindings.set(heightBuffer, group)
-      scans.set(heightBuffer, device.createBindGroup({ layout: scan.getBindGroupLayout(0), entries: [
+      byOffsets.set(offsetBuffer, group)
+      if (!scans.has(heightBuffer)) scans.set(heightBuffer, device.createBindGroup({ layout: scan.getBindGroupLayout(0), entries: [
         { binding: 0, resource: { buffer: heightBuffer, size: columns * rows * 4 } },
         { binding: 1, resource: { buffer: partials } },
       ] }))
@@ -149,7 +154,7 @@ export function createLensRenderer(
     return group
   }
 
-  let bindGroup = bindingsFor(initialLens.heightBuffer)
+  let bindGroup = bindingsFor(initialLens.heightBuffer, initialLens.offsetBuffer)
   let scanGroup = scans.get(initialLens.heightBuffer)!
 
   return {
@@ -165,7 +170,7 @@ export function createLensRenderer(
       }
 
       // Bind the current GPU resource without reading back its contents.
-      bindGroup = bindingsFor(lens.heightBuffer)
+      bindGroup = bindingsFor(lens.heightBuffer, lens.offsetBuffer)
       scanGroup = scans.get(lens.heightBuffer)!
       uniforms.update(viewProjection, relief)
     },
@@ -195,6 +200,7 @@ export function createLensRenderer(
       uniforms.buffer.destroy()
       partials.destroy()
       bounds.destroy()
+      zeroOffsets.destroy()
     },
   }
 }

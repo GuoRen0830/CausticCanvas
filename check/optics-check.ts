@@ -162,6 +162,49 @@ async function run() {
   const noCopy = copy(noEncoder, hg, 9)
   device.queue.submit([noEncoder.finish()])
   assert((await read(noCopy)).every(v => Math.abs(v) < 1e-6), 'equal-index optical height gradient is zero')
+  // Vertex motion: displaced vertices change face normals and transmitted flux.
+  const cell = [input.lens.sizeX / 2, input.lens.sizeY / 2]
+  const xy = Float32Array.from({ length: 18 }, (_, i) => 0.15 * cell[i % 2] * Math.sin(1.7 * i + 0.4))
+  const ob = buffer(xy)
+  const moved: ForwardInput = { ...input, lens: { ...input.lens, offsetBuffer: ob } }
+  async function evaluateMoved(values: Float32Array, offsets: Float32Array) {
+    device.queue.writeBuffer(hb, 0, values)
+    device.queue.writeBuffer(ob, 0, offsets)
+    const encoder = device.createCommandEncoder()
+    const result = model.encode(encoder, moved)
+    const imageCopy = copy(encoder, (result.caustic as { buffer: GPUBuffer }).buffer, n)
+    const beamCopy = copy(encoder, result.beams.buffer, 8 * 4)
+    device.queue.submit([encoder.finish()])
+    return { image: await read(imageCopy), beams: await read(beamCopy) }
+  }
+  const movedGpu = await evaluateMoved(h, xy), movedCpu = reference(input, h, xy)
+  assert(relative(movedGpu.image, movedCpu.image) < 3e-4, 'displaced vertices: receiver agrees with CPU')
+  assert(relative(movedGpu.beams, movedCpu.beams) < 3e-5, 'displaced vertices: beam directions and flux agree with CPU')
+  device.queue.writeBuffer(pg, 0, pixel)
+  const og = buffer(new Float32Array(18).fill(999))
+  const movedEncoder = device.createCommandEncoder()
+  const movedResult = model.encode(movedEncoder, moved)
+  model.encodeBackward!(movedEncoder, moved, movedResult, pg, hg, og)
+  const movedHeightCopy = copy(movedEncoder, hg, 9), movedOffsetCopy = copy(movedEncoder, og, 18)
+  device.queue.submit([movedEncoder.finish()])
+  const movedHeightGradient = await read(movedHeightCopy), movedOffsetGradient = await read(movedOffsetCopy)
+  const movedObjective = (values: ArrayLike<number>, offsets: ArrayLike<number>) =>
+    reference(input, values, offsets).image.reduce((s, v, i) => s + v * pixel[i], 0)
+  const movedHeightFinite = Array.from(h, (_, i) => {
+    const plus = Array.from(h), minus = Array.from(h)
+    plus[i] += 1e-7; minus[i] -= 1e-7
+    return (movedObjective(plus, xy) - movedObjective(minus, xy)) / 2e-7
+  })
+  const movedOffsetFinite = Array.from(xy, (_, i) => {
+    const plus = Array.from(xy), minus = Array.from(xy)
+    plus[i] += 1e-7; minus[i] -= 1e-7
+    return (movedObjective(h, plus) - movedObjective(h, minus)) / 2e-7
+  })
+  log.push(`Displaced gradient relative L2 errors: height ${relative(movedHeightGradient, movedHeightFinite)}, offset ${relative(movedOffsetGradient, movedOffsetFinite)}`)
+  assert(relative(movedHeightGradient, movedHeightFinite) < 0.003, 'displaced vertices: height gradients agree with CPU central differences')
+  assert(relative(movedOffsetGradient, movedOffsetFinite) < 0.003, 'x and y gradients agree with CPU central differences')
+  const zeroOffsets = await evaluateMoved(h, new Float32Array(18))
+  assert(relative(zeroOffsets.image, reference(input, h).image) < 3e-4, 'zero offsets match a lens without offsets')
   model.destroy(); model.destroy()
   assert(hb.size === 36, 'borrowed height buffer retained')
   // Full default-size smoke check.

@@ -16,6 +16,9 @@ var<storage, read> heights: array<f32>;
 
 @group(0) @binding(2) var<storage, read> heightBounds: vec2f;
 
+// Per-vertex XY displacement from the uniform grid, in meters.
+@group(0) @binding(3) var<storage, read> offsets: array<vec2f>;
+
 struct VertexOutput {
   @builtin(position) clipPosition: vec4<f32>,
   @location(0) worldPosition: vec3<f32>,
@@ -37,7 +40,7 @@ fn vertexMain(
   // Map the grid onto the centered physical aperture.
   let xy = (
     gridPosition / gridExtent - vec2<f32>(0.5)
-  ) * lensUniforms.apertureSize;
+  ) * lensUniforms.apertureSize + offsets[vertexIndex];
 
   // Exaggerate displacement around the midpoint in this preview only.
   // The shared optical height buffer is read-only and remains in meters.

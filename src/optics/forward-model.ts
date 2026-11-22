@@ -52,6 +52,9 @@ export async function createForwardModel(
     if (lens.heightBuffer.size < vertexCount * 4 || !(lens.heightBuffer.usage & GPUBufferUsage.STORAGE)) {
       throw new Error('The height buffer must contain one storage f32 per vertex.')
     }
+    if (lens.offsetBuffer && (lens.offsetBuffer.size < vertexCount * 8 || !(lens.offsetBuffer.usage & GPUBufferUsage.STORAGE))) {
+      throw new Error('The offset buffer must contain one storage vec2<f32> per vertex.')
+    }
   }
 
   function allocate(label: string, size: number, usage: GPUBufferUsageFlags) {
@@ -97,10 +100,13 @@ export async function createForwardModel(
     const beams = allocate('Triangle beams', faceCount * 16, storage)
     const image = allocate('Receiver irradiance', width * height * 4, storage)
     const triangleGradients = allocate('Triangle height derivatives', faceCount * 16, storage)
+    // Lenses without offsets read this all-zero buffer, so every vertex sits on the grid.
+    const zeroOffsets = allocate('Zero vertex offsets', vertexCount * 8, GPUBufferUsage.STORAGE)
+    const offsetsOf = (input: ForwardInput) => input.lens.offsetBuffer ?? zeroOffsets
     const scene = options.designView && await createScenePasses(device, options.designView, faceCount, faceGrid, vertexGrid,
       beams, image, triangleGradients, allocate, options.timestamps)
     async function createPlanePasses() {
-      const footprints = allocate('Projected footprints', strategy === 'baseline' ? 128 : faceCount * 128, storage)
+      const footprints = allocate('Projected footprints', strategy === 'baseline' ? 144 : faceCount * 144, storage)
       const unusedPixelGradient = allocate('Unused pixel derivative', 4, storage)
       const unusedHeightGradient = allocate('Unused height derivative', 4, storage)
       const layout = device.createBindGroupLayout({
@@ -113,6 +119,7 @@ export async function createForwardModel(
           { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
           { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
           { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+          { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
         ],
       })
       const module = device.createShaderModule({ label: 'Triangle optics', code: shaderSource + '\n' + cooperativeSource })
@@ -130,16 +137,24 @@ export async function createForwardModel(
           compute: { module, entryPoint, constants: { cacheFootprints: strategy === 'baseline' ? 0 : 1, lanesPerTriangle: lanes } },
         })),
       )
+      // x and y derivatives recompute each footprint, since cached ones carry z derivatives.
+      const motion = await Promise.all([1, 2].flatMap(derivativeMode => ['backward', 'gather'].map(entryPoint =>
+        device.createComputePipelineAsync({
+          label: `Optics ${entryPoint} ${'zxy'[derivativeMode]}`,
+          layout: pipelineLayout,
+          compute: { module, entryPoint, constants: { cacheFootprints: 0, derivativeMode } },
+        }))))
 
       function bind(input: ForwardInput, pixel = unusedPixelGradient, gradient = unusedHeightGradient) {
         return device.createBindGroup({
           layout,
           entries: [uniforms(input), input.lens.heightBuffer, beams, image, pixel, triangleGradients, gradient, footprints]
-            .map((buffer, binding) => ({ binding, resource: { buffer } })),
+            .map((buffer, binding) => ({ binding, resource: { buffer } }))
+            .concat({ binding: 12, resource: { buffer: offsetsOf(input) } }),
         })
       }
 
-      return { forward, backward, gather, project, bind }
+      return { forward, backward, gather, project, bind, motion }
     }
     const plane = scene ? undefined : await createPlanePasses()
 
@@ -151,7 +166,7 @@ export async function createForwardModel(
         validate(input)
         encoder.clearBuffer(image)
         if (scene) {
-          scene.encode(encoder, uniforms(input), input.lens.heightBuffer)
+          scene.encode(encoder, uniforms(input), input.lens.heightBuffer, offsetsOf(input))
         } else if (plane) {
           const { forward, project, bind } = plane
           if (cooperative) {
@@ -177,11 +192,17 @@ export async function createForwardModel(
         return lastResult
       },
 
-      encodeBackward(encoder, input, result, pixelGradient, heightGradient) {
+      encodeBackward(encoder, input, result, pixelGradient, heightGradient, offsetGradient) {
         if (disposed) throw new Error('Forward model has been destroyed.')
         validate(input)
-        if (result !== lastResult || result.beams.lens.heightBuffer !== input.lens.heightBuffer || parameterKey(input) !== lastParameters) {
+        if (result !== lastResult || result.beams.lens.heightBuffer !== input.lens.heightBuffer ||
+            result.beams.lens.offsetBuffer !== input.lens.offsetBuffer || parameterKey(input) !== lastParameters) {
           throw new Error('Backward requires the latest matching forward evaluation.')
+        }
+        if (offsetGradient && (offsetGradient.size < vertexCount * 8 || !(offsetGradient.usage & GPUBufferUsage.STORAGE) ||
+            [input.lens.heightBuffer, input.lens.offsetBuffer, pixelGradient, heightGradient].includes(offsetGradient) ||
+            buffers.includes(offsetGradient))) {
+          throw new Error('Invalid offset gradient buffer.')
         }
         if (pixelGradient.size < width * height * 4 || heightGradient.size < vertexCount * 4 ||
             !(pixelGradient.usage & GPUBufferUsage.STORAGE) || !(heightGradient.usage & GPUBufferUsage.STORAGE)) {
@@ -192,10 +213,20 @@ export async function createForwardModel(
           throw new Error('Optical input and output buffers must not alias.')
         }
         if (scene) {
-          scene.backward(encoder, uniforms(input), input.lens.heightBuffer, pixelGradient, heightGradient)
+          scene.backward(encoder, uniforms(input), input.lens.heightBuffer, offsetsOf(input), pixelGradient, heightGradient, offsetGradient)
           return
         }
-        const { backward, gather, bind } = plane!
+        const { backward, gather, bind, motion } = plane!
+        if (offsetGradient) {
+          const motionGroup = bind(input, pixelGradient, offsetGradient)
+          const pass = encoder.beginComputePass({ label: 'Backward optics x and y', timestampWrites: options.timestamps?.('motion') })
+          pass.setBindGroup(0, motionGroup)
+          for (const [pipeline, grid] of [[motion[0], faceGrid], [motion[1], vertexGrid], [motion[2], faceGrid], [motion[3], vertexGrid]] as const) {
+            pass.setPipeline(pipeline)
+            pass.dispatchWorkgroups(...grid)
+          }
+          pass.end()
+        }
         const group = bind(input, pixelGradient, heightGradient)
         const pass = encoder.beginComputePass({ label: 'Backward optics', timestampWrites: options.timestamps?.('backward') })
         pass.setBindGroup(0, group)

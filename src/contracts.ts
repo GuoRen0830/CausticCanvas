@@ -12,6 +12,13 @@ export interface LensState {
   // Row-major f32 values, starting at byte offset 0.
   // All shared height buffers require STORAGE | COPY_SRC | COPY_DST.
   heightBuffer: GPUBuffer
+
+  // Optional XY displacement of each vertex from its uniform grid position, in
+  // meters: row-major vec2<f32> (x, y) per vertex, starting at byte offset 0.
+  // Missing means every vertex sits on the grid. Boundary vertices only slide
+  // along the aperture edge, so the aperture itself never changes.
+  // Same usage flags as the height buffer.
+  offsetBuffer?: GPUBuffer
 }
 
 export interface OpticalConfig {
@@ -36,7 +43,8 @@ export interface TriangleBeamField {
   // STORAGE array<vec4<f32>>, byte offset 0, 16-byte stride.
   // xyz: unit propagation direction in lens-local coordinates.
   // w: total transmitted radiant flux in W, finite and nonnegative.
-  // For valid lossless beams: incidentIrradiance * triangle XY area.
+  // For valid lossless beams: incidentIrradiance * triangle XY area, using the
+  // displaced vertex positions when the lens has offsets.
   // Inactive beams use (0, 0, 1, 0); consumers skip zero flux.
   // Consumers borrow both buffers; resource owners manage their lifetime.
   readonly buffer: GPUBuffer
@@ -138,12 +146,15 @@ export interface ForwardModel {
   // in loss units per meter. Overwrite every entry; never accumulate.
   // Pass the exact result of that encode, before its outputs or heights are reused.
   // The same recording rules as encode apply: no finish, submit, or readback.
+  // offsetGradient, when given: borrowed STORAGE row-major vec2<f32> dL/d(x, y)
+  // per lens vertex, in loss units per meter, overwritten like heightGradient.
   encodeBackward?(
     encoder: GPUCommandEncoder,
     input: ForwardInput,
     result: ForwardResult,
     pixelGradient: GPUBuffer,
     heightGradient: GPUBuffer,
+    offsetGradient?: GPUBuffer,
   ): void
 
   // Release owned resources only; never destroy the borrowed lens heights.

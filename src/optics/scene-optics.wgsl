@@ -42,7 +42,12 @@ fn sceneSpot(face: u32, tri: Triangle, derivatives: bool) -> SceneSpot {
   let c = vertex(ids.z, vec3f(0,0,1));
   let ray = beams[face];
   var d = Dual3(constant(ray.x),constant(ray.y),constant(ray.z));
-  if derivatives { d = refractFace(a,b,c).direction; }
+  var flux = constant(ray.w);
+  if derivatives {
+    let refraction = refractFace(a,b,c);
+    d = refraction.direction;
+    flux = refraction.flux;
+  }
   let incidence = -dotNormal(n,d);
   if !(incidence.x > 1e-7) { return spot; }
   let sourceNormal = crossDual(subtract(b,a),subtract(c,a));
@@ -53,7 +58,7 @@ fn sceneSpot(face: u32, tri: Triangle, derivatives: bool) -> SceneSpot {
     surfaceCorner(b,d,n,tri.a,incidence),surfaceCorner(c,d,n,tri.a,incidence));
   // Density is power per square meter on the inclined receiving surface.
   spot.normal = n;
-  spot.density = divide(incidence*ray.w, perpendicularArea);
+  spot.density = divide(mul(incidence,flux), perpendicularArea);
   return spot;
 }
 
@@ -94,6 +99,7 @@ fn sceneBackward(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgrou
   let face = opticalIndex(id, groups);
   if face >= arrayLength(&sceneHits) { return; }
   triangleGradient[face] = vec4f(0);
+  // The same pass runs once per derivativeMode (z, x, y); gather reads each in turn.
   let hit = sceneHits[face];
   if hit.trianglePlusOne == 0u { return; }
   let tri = triangles[hit.trianglePlusOne-1u];

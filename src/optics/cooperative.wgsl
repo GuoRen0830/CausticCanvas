@@ -43,7 +43,7 @@ fn backwardCooperative(@builtin(workgroup_id) group: vec3u, @builtin(num_workgro
     let pixelArea = (p.receiverSize.x/f32(p.image.x))*(p.receiverSize.y/f32(p.image.y));
     for (var i=localLane; i<count; i+=lanesPerTriangle) {
       let pixel = box.xy + vec2u(i%width,i/width);
-      let contribution = divide(overlap(f,pixel),f.area)*(f.beam.w/pixelArea);
+      let contribution = mul(divide(overlap(f,pixel),f.area),f.flux)/pixelArea;
       gradient += contribution.yzw*pixelGradient[pixel.y*p.image.x+pixel.x];
     }
   }

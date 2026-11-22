@@ -1,4 +1,6 @@
 override cacheFootprints: bool = false;
+// Which vertex coordinate the dual numbers differentiate: 0 = z (height), 1 = x, 2 = y.
+override derivativeMode: u32 = 0u;
 
 struct Params {
   grid: vec2u,
@@ -18,8 +20,11 @@ struct Params {
 @group(0) @binding(4) var<storage, read> pixelGradient: array<f32>;
 @group(0) @binding(5) var<storage, read_write> triangleGradient: array<vec4f>;
 @group(0) @binding(6) var<storage, read_write> heightGradient: array<f32>;
+// Per-vertex XY displacement from the uniform grid, in meters.
+@group(0) @binding(12) var<storage, read> offsets: array<vec2f>;
 
-// A dual scalar stores its value and derivatives with respect to three heights.
+// A dual scalar stores its value and derivatives with respect to one coordinate
+// (selected by derivativeMode) of each of a face's three vertices.
 fn constant(v: f32) -> vec4f { return vec4f(v, 0, 0, 0); }
 fn mul(a: vec4f, b: vec4f) -> vec4f {
   return vec4f(a.x * b.x, a.yzw * b.x + b.yzw * a.x);
@@ -47,8 +52,13 @@ fn indices(face: u32) -> vec3u {
   return vec3u(a+1u, a+p.grid.x+1u, a+p.grid.x);
 }
 fn vertex(index: u32, derivative: vec3f) -> Dual3 {
-  let xy = (vec2f(f32(index % p.grid.x), f32(index / p.grid.x)) / vec2f(p.grid-vec2u(1)) - 0.5) * p.aperture;
-  return Dual3(constant(xy.x), constant(xy.y), vec4f(heights[index], derivative));
+  let xy = (vec2f(f32(index % p.grid.x), f32(index / p.grid.x)) / vec2f(p.grid-vec2u(1)) - 0.5) * p.aperture
+    + offsets[index];
+  var v = Dual3(constant(xy.x), constant(xy.y), constant(heights[index]));
+  if derivativeMode == 0u { v.z = vec4f(v.z.x, derivative); }
+  if derivativeMode == 1u { v.x = vec4f(v.x.x, derivative); }
+  if derivativeMode == 2u { v.y = vec4f(v.y.x, derivative); }
+  return v;
 }
 fn project(v: Dual3, d: Dual3) -> Dual2 {
   let t = divide(constant(p.receiverZ)-v.z, d.z);
@@ -61,23 +71,29 @@ struct Footprint {
   corners: array<Dual2,3>,
   area: vec4f,
   beam: vec4f,
+  // Transmitted flux with its derivatives (beam.w is its value).
+  flux: vec4f,
 }
 @group(0) @binding(7) var<storage, read_write> footprints: array<Footprint>;
 
-struct Refraction { beam: vec4f, direction: Dual3 }
+struct Refraction { beam: vec4f, direction: Dual3, flux: vec4f }
 fn refractFace(a: Dual3, b: Dual3, c: Dual3) -> Refraction {
   let dark = vec4f(0,0,1,0);
   let normal = crossDual(subtract(b,a), subtract(c,a));
   let length = root(mul(normal.x,normal.x)+mul(normal.y,normal.y)+mul(normal.z,normal.z));
   let n = Dual3(divide(normal.x,length),divide(normal.y,length),divide(normal.z,length));
   let k = constant(1-p.eta*p.eta) + mul(n.z,n.z)*(p.eta*p.eta);
-  if !(k.x > 1e-8) { return Refraction(dark, Dual3()); }
+  if !(k.x > 1e-8) { return Refraction(dark, Dual3(), vec4f(0)); }
   let factor = root(k)-n.z*p.eta;
   var d = Dual3(mul(factor,n.x),mul(factor,n.y),constant(p.eta)+mul(factor,n.z));
   if p.eta == 1.0 { d = Dual3(constant(0),constant(0),constant(1)); }
-  if !(d.z.x > 1e-6) { return Refraction(dark, Dual3()); }
-  let flux = p.irradiance * (p.aperture.x/f32(p.grid.x-1u)) * (p.aperture.y/f32(p.grid.y-1u)) * 0.5;
-  return Refraction(vec4f(d.x.x,d.y.x,d.z.x,flux), d);
+  if !(d.z.x > 1e-6) { return Refraction(dark, Dual3(), vec4f(0)); }
+  // Light enters the flat entry plane along +Z, so a face transmits the
+  // irradiance times its XY area. A folded (inverted) face transmits nothing.
+  let doubleArea = mul(b.x-a.x,c.y-a.y)-mul(c.x-a.x,b.y-a.y);
+  if !(doubleArea.x > 0) { return Refraction(dark, Dual3(), vec4f(0)); }
+  let flux = doubleArea*(0.5*p.irradiance);
+  return Refraction(vec4f(d.x.x,d.y.x,d.z.x,flux.x), d, flux);
 }
 
 fn footprint(face: u32) -> Footprint {
@@ -90,6 +106,7 @@ fn footprint(face: u32) -> Footprint {
   if !(max(a.z.x,max(b.z.x,c.z.x)) < p.receiverZ) { return result; }
   let ray = refractFace(a,b,c);
   result.beam = ray.beam;
+  result.flux = ray.flux;
   if ray.beam.w == 0 { return result; }
   let d = ray.direction;
   result.corners = array<Dual2,3>(project(a,d),project(b,d),project(c,d));
@@ -199,7 +216,7 @@ fn backward(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) g
     let pixelArea = (p.receiverSize.x/f32(p.image.x))*(p.receiverSize.y/f32(p.image.y));
     for (var y=box.y; y<box.w; y++) {
       for (var x=box.x; x<box.z; x++) {
-        let contribution = divide(overlap(f,vec2u(x,y)),f.area)*(f.beam.w/pixelArea);
+        let contribution = mul(divide(overlap(f,vec2u(x,y)),f.area),f.flux)/pixelArea;
         gradient += contribution.yzw*pixelGradient[y*p.image.x+x];
       }
     }
@@ -224,5 +241,6 @@ fn gather(@builtin(global_invocation_id) id: vec3u, @builtin(num_workgroups) gro
       }
     }
   }
-  heightGradient[v] = sum;
+  // Heights fill the whole output; x and y fill one component of a vec2 per vertex.
+  if derivativeMode == 0u { heightGradient[v] = sum; } else { heightGradient[2u*v+derivativeMode-1u] = sum; }
 }

@@ -18,6 +18,7 @@ import { faceMetrics, faceWeights, strokeFractions, strokeWeights } from './stro
 //   timing  GPU timestamp steps to average per pass (default 20; 0 disables)
 //   scene   bundled scene id (default: the app's default scene)
 //   target  face for the face case (default: the horizontal stroke)
+//   diagnose 1 to report where on the lens the far spill comes from (slow readback)
 // Reports image quality (stroke fractions), lens shape metrics and timing as JSON.
 const lines: string[] = []
 function log(value: unknown) {
@@ -128,6 +129,7 @@ async function run() {
   const checkpoints = []
   let lastHeights = new Float32Array(0)
   let lastImage = new Float32Array(0)
+  let lastOffsets: Float32Array | undefined
   let trainingMs = 0
   const batch = 10
   while (iteration < totalCalls) {
@@ -147,12 +149,15 @@ async function run() {
     const heights = await read(state.lens.heightBuffer, vertices)
     const fractions = strokeFractions(image, weights, view)
     const faceStats = face ? faceMetrics(image, weights, view, receiver) : null
-    const shape = lensShapeMetrics(heights, lensSpec, settings.maxSurfaceSlope)
+    // Vertex motion: how far vertices moved (in cells) and the smallest face.
+    const offsets = state.lens.offsetBuffer ? await read(state.lens.offsetBuffer, 2 * vertices) : undefined
+    const shape = lensShapeMetrics(heights, lensSpec, settings.maxSurfaceSlope, offsets)
     // Adam scale check: when sqrt(v) approaches epsilon, epsilon shrinks the step.
     const { heightGradient, moments } = (optimizer as any).diagnostics
     const gradient = await read(heightGradient, vertices)
     const mv = await read(moments, 2 * vertices)
     const rootV = Array.from({ length: vertices }, (_, i) => Math.sqrt(mv[2 * i + 1])).sort((a, b) => a - b)
+    const motion = offsets ? meshMotion(offsets, grid, lensSpec) : undefined
     const point = {
       iteration,
       modelPct: +(100 * fractions.modelFraction).toFixed(2),
@@ -169,14 +174,18 @@ async function run() {
       gradRms: +Math.sqrt(gradient.reduce((sum, g) => sum + g * g, 0) / vertices).toExponential(2),
       medianRootV: +rootV[vertices >> 1].toExponential(2),
       wallMsPerStep: +(trainingMs / (iteration - timed)).toFixed(2),
+      ...motion,
     }
     checkpoints.push(point)
     lastHeights = heights
     lastImage = image
+    lastOffsets = offsets
     log(point)
   }
   const final = checkpoints[checkpoints.length - 1]
-  const summary = { final, spill: spillBands(lastImage, weights, view.surfaceAreas, receiver), errors }
+  const diagnosis = query.get('diagnose') === '1' && result?.firstHits
+    ? await diagnoseSpill(device, result, grid, lensSpec, receiver, weights, lastOffsets) : undefined
+  const summary = { final, spill: spillBands(lastImage, weights, view.surfaceAreas, receiver), diagnosis, errors }
   ;(window as any).studyResult = { settings, grid, checkpoints, ...summary, heights: Array.from(lastHeights),
     image: Array.from(lastImage), dump: relativeDump(lastImage, weights, view.surfaceAreas, receiver) }
   log(summary)
@@ -187,9 +196,32 @@ async function run() {
 }
 run().catch(error => { log('Error: ' + String(error)); console.error(error) })
 
-// Share of the received power (%) by distance in pixels from the brush
-// (weight >= 0.5): where the light that misses the drawing goes.
-function spillBands(image: Float32Array, weights: Float32Array, areas: Float32Array, { width, height }: { width: number, height: number }) {
+// Largest and mean vertex displacement in cells, and the smallest face area
+// as a fraction of its grid area.
+function meshMotion(offsets: Float32Array, grid: number, lens: { sizeX: number, sizeY: number }) {
+  const cells = grid - 1, dx = lens.sizeX / cells, dy = lens.sizeY / cells
+  let largest = 0, total = 0, smallest = Infinity
+  for (let v = 0; v < grid * grid; v++) {
+    const shift = Math.hypot(offsets[2 * v] / dx, offsets[2 * v + 1] / dy)
+    largest = Math.max(largest, shift)
+    total += shift
+  }
+  const at = (v: number, k: number) => (k ? Math.floor(v / grid) * dy : (v % grid) * dx) + offsets[2 * v + k]
+  for (let r = 0; r < cells; r++) {
+    for (let c = 0; c < cells; c++) {
+      const a = r * grid + c
+      for (const [i, j, k] of [[a, a + 1, a + grid], [a + 1, a + grid + 1, a + grid]]) {
+        const area = (at(j, 0) - at(i, 0)) * (at(k, 1) - at(i, 1)) - (at(k, 0) - at(i, 0)) * (at(j, 1) - at(i, 1))
+        smallest = Math.min(smallest, area / (dx * dy))
+      }
+    }
+  }
+  return { maxShiftCells: +largest.toFixed(3), meanShiftCells: +(total / (grid * grid)).toFixed(4),
+    minAreaRatio: +smallest.toFixed(3) }
+}
+
+// Distance in pixels from the brush (weight >= 0.5), in 4-neighbour steps.
+function brushDistance(weights: Float32Array, width: number, height: number) {
   const distance = new Float32Array(width * height).fill(Infinity)
   const queue: number[] = []
   for (let i = 0; i < distance.length; i++) if (weights[i] >= 0.5) { distance[i] = 0; queue.push(i) }
@@ -202,6 +234,13 @@ function spillBands(image: Float32Array, weights: Float32Array, areas: Float32Ar
       if (distance[j] > distance[i] + 1) { distance[j] = distance[i] + 1; queue.push(j) }
     }
   }
+  return distance
+}
+
+// Share of the received power (%) by distance in pixels from the brush
+// (weight >= 0.5): where the light that misses the drawing goes.
+function spillBands(image: Float32Array, weights: Float32Array, areas: Float32Array, { width, height }: { width: number, height: number }) {
+  const distance = brushDistance(weights, width, height)
   const edges = [0, 2, 4, 8, Infinity], bands = [0, 0, 0, 0, 0]
   let total = 0
   for (let i = 0; i < image.length; i++) {
@@ -231,4 +270,92 @@ function relativeDump(image: Float32Array, weights: Float32Array, areas: Float32
     rows.push(row)
   }
   return rows
+}
+
+// Where on the lens the light that lands more than 3 px from the brush comes
+// from. Each lens triangle's beam lands at its centroid plus t times its
+// direction. Its stretch is how far (in light-view pixels) it lands from its
+// neighbouring triangles: large across a crease, small in a smooth region.
+// lensMap: share of each 8 x 8-cell block's power that spills (0 below 1e-4,
+// f = all of it, log scale); creaseMap: largest stretch in the block
+// (4 = 1 px, 8 = 10 px, 12 = 100 px).
+async function diagnoseSpill(device: GPUDevice, result: ForwardResult, grid: number,
+  lens: { sizeX: number, sizeY: number }, receiver: { width: number, height: number },
+  weights: Float32Array, offsets?: Float32Array) {
+  const faces = 2 * (grid - 1) * (grid - 1), cells = grid - 1
+  async function readAll(source: GPUBuffer, bytes: number) {
+    const staging = device.createBuffer({ size: bytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST })
+    const enc = device.createCommandEncoder()
+    enc.copyBufferToBuffer(source, 0, staging, 0, bytes)
+    device.queue.submit([enc.finish()])
+    await staging.mapAsync(GPUMapMode.READ)
+    const data = staging.getMappedRange().slice(0)
+    staging.unmap()
+    staging.destroy()
+    return data
+  }
+  const beams = new Float32Array(await readAll(result.beams.buffer, faces * 16))
+  const hitData = await readAll(result.firstHits!.buffer, faces * 8)
+  const hitIds = new Uint32Array(hitData), hitT = new Float32Array(hitData)
+  const { width, height } = receiver
+  const distance = brushDistance(weights, width, height)
+  const landX = new Float32Array(faces).fill(NaN), landY = new Float32Array(faces).fill(NaN)
+  for (let f = 0; f < faces; f++) {
+    if (!hitIds[2 * f] || !(beams[4 * f + 3] > 0)) continue
+    const cell = f >> 1, row = Math.floor(cell / cells), col = cell % cells
+    const a = row * grid + col
+    const ids = f % 2 === 0 ? [a, a + 1, a + grid] : [a + 1, a + grid + 1, a + grid]
+    let cx = 0, cy = 0
+    for (const v of ids) {
+      cx += (((v % grid) / cells - 0.5) * lens.sizeX + (offsets?.[2 * v] ?? 0)) / 3
+      cy += ((Math.floor(v / grid) / cells - 0.5) * lens.sizeY + (offsets?.[2 * v + 1] ?? 0)) / 3
+    }
+    const t = hitT[2 * f + 1]
+    landX[f] = ((cx + t * beams[4 * f]) / lens.sizeX + 0.5) * width
+    landY[f] = ((cy + t * beams[4 * f + 1]) / lens.sizeY + 0.5) * height
+  }
+  const apart = (f: number, g: number) => g < 0 || Number.isNaN(landX[g]) ? 0
+    : Math.hypot(landX[f] - landX[g], landY[f] - landY[g])
+  const edges = [0.5, 2, 8, 32, Infinity]
+  const spillByStretch = edges.map(() => 0), allByStretch = edges.map(() => 0)
+  const blocks = 128, per = cells / blocks
+  const blockPower = new Float64Array(blocks * blocks), blockSpill = new Float64Array(blocks * blocks)
+  const blockStretch = new Float64Array(blocks * blocks)
+  let total = 0, spill = 0, offImage = 0
+  for (let f = 0; f < faces; f++) {
+    if (Number.isNaN(landX[f])) continue
+    const power = beams[4 * f + 3]
+    const cell = f >> 1, row = Math.floor(cell / cells), col = cell % cells
+    const stretch = Math.max(apart(f, f ^ 1), apart(f, col + 1 < cells ? 2 * (cell + 1) : -1),
+      apart(f, row + 1 < cells ? 2 * (cell + cells) + 1 : -1))
+    const bin = edges.findIndex(edge => stretch <= edge)
+    const block = Math.floor(row / per) * blocks + Math.floor(col / per)
+    total += power
+    allByStretch[bin] += power
+    blockPower[block] += power
+    blockStretch[block] = Math.max(blockStretch[block], stretch)
+    const px = Math.floor(landX[f]), py = Math.floor(landY[f])
+    if (!(px >= 0 && py >= 0 && px < width && py < height)) { offImage += power; continue }
+    if (distance[py * width + px] > 3) { spill += power; spillByStretch[bin] += power; blockSpill[block] += power }
+  }
+  const pct = (value: number, of: number) => +(100 * value / Math.max(of, 1e-30)).toFixed(2)
+  const lensMap: string[] = [], creaseMap: string[] = []
+  for (let r = 0; r < blocks; r++) {
+    let spillRow = '', creaseRow = ''
+    for (let c = 0; c < blocks; c++) {
+      const b = r * blocks + c
+      const share = blockSpill[b] / Math.max(blockPower[b], 1e-30)
+      spillRow += Math.max(0, Math.min(15, Math.round(15 * (1 + Math.log10(Math.max(share, 1e-5)) / 4)))).toString(16)
+      creaseRow += Math.max(0, Math.min(15, Math.round(4 + 4 * Math.log10(Math.max(blockStretch[b], 1e-3))))).toString(16)
+    }
+    lensMap.push(spillRow)
+    creaseMap.push(creaseRow)
+  }
+  return {
+    spillPct: pct(spill, total), offImagePct: pct(offImage, total),
+    stretchBinsPx: '<=0.5, <=2, <=8, <=32, >32',
+    spillByStretchPct: spillByStretch.map(v => pct(v, spill)),
+    allByStretchPct: allByStretch.map(v => pct(v, total)),
+    lensMap, creaseMap,
+  }
 }

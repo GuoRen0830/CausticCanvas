@@ -32,7 +32,7 @@ export function createBeamRenderer(
     label: 'Scene beam rendering', code: [commonShader, coverageShader, beamShader, hitTypes, splatShader].join('\n'),
   })
   const fieldLayout = device.createBindGroupLayout({
-    entries: [0, 1].map(binding => ({
+    entries: [0, 1, 2].map(binding => ({
       binding, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' },
     })),
   })
@@ -112,7 +112,18 @@ export function createBeamRenderer(
     }
     return screen
   }
-  let boundField: { heights: GPUBuffer; beams: GPUBuffer; group: GPUBindGroup } | undefined
+  let boundField: { heights: GPUBuffer; beams: GPUBuffer; offsets: GPUBuffer; group: GPUBindGroup } | undefined
+  // Lenses without vertex offsets read zeros (one vec2 per vertex).
+  let zeroOffsets: GPUBuffer | undefined
+  const offsetsFor = (lens: ForwardResult['beams']['lens']) => {
+    if (lens.offsetBuffer) return lens.offsetBuffer
+    const size = lens.columns * lens.rows * 8
+    if (!zeroOffsets || zeroOffsets.size !== size) {
+      zeroOffsets?.destroy()
+      zeroOffsets = device.createBuffer({ label: 'Zero lens offsets', size, usage: GPUBufferUsage.STORAGE })
+    }
+    return zeroOffsets
+  }
 
   return {
     // Display settings never modify the shared optical buffers.
@@ -145,11 +156,14 @@ export function createBeamRenderer(
       const { beams: field } = result
       const lens = field.lens
       const count = 2 * (lens.columns - 1) * (lens.rows - 1)
-      if (!boundField || boundField.heights !== lens.heightBuffer || boundField.beams !== field.buffer) {
+      const offsets = offsetsFor(lens)
+      if (!boundField || boundField.heights !== lens.heightBuffer || boundField.beams !== field.buffer ||
+          boundField.offsets !== offsets) {
         boundField = {
-          heights: lens.heightBuffer, beams: field.buffer,
+          heights: lens.heightBuffer, beams: field.buffer, offsets,
           group: device.createBindGroup({ layout: fieldLayout, entries: [
             { binding: 0, resource: { buffer: lens.heightBuffer } }, { binding: 1, resource: { buffer: field.buffer } },
+            { binding: 2, resource: { buffer: offsets } },
           ] }),
         }
       }
@@ -203,6 +217,7 @@ export function createBeamRenderer(
     destroy() {
       screen?.destroy()
       uniform.destroy()
+      zeroOffsets?.destroy()
     },
   }
 }

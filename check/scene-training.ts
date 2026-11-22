@@ -94,7 +94,50 @@ export async function checkSceneTraining(device: GPUDevice, report: (line: strin
       worst = Math.max(worst,relative)
       near(relative,0,0.035,`Height VJP at vertex ${v}, FD ${fd}, AD ${analytic[v]}`)
     }
-    report(`PASS scene design depths, tilted-area target power, far receiver and finite-difference VJP (max relative error ${(100*worst).toFixed(2)}%)`)
+    // Vertex motion: a scene that is just a flat sheet at the receiver plane
+    // must reproduce the plane model (whose x/y gradients optics-check compares
+    // with CPU central differences): same image, height and x/y gradients.
+    // Visibility edges in the panel scene make finite differences in x and y
+    // unreliable at steps the f32 image can resolve.
+    const cellX = spec.sizeX/(spec.columns-1), cellY = spec.sizeY/(spec.rows-1)
+    const xy = Float32Array.from({length:2*count},(_,i) => 0.1*(i%2 ? cellY : cellX)*Math.sin(1.3*i+0.2))
+    const offsets = allocate(xy.byteLength,storage)
+    device.queue.writeBuffer(offsets,0,xy)
+    device.queue.writeBuffer(lens.heightBuffer,0,original)
+    vertices.length = 0; indices.length = 0
+    panel(-0.25,0.25,0.2,receiver.z,0)
+    const sheet = buildDesignView({ vertices: new Float32Array(vertices), indices: new Uint32Array(indices) },receiver)
+    const moved = { ...input, lens: { ...lens, offsetBuffer: offsets } }
+    const sheetModel = (await createForwardModel(device,moved,{designView:sheet}))!
+    const planeModel = (await createForwardModel(device,moved))!
+    async function gradients(model: ForwardModel) {
+      const image = allocate(4*pixels,storage), h = allocate(count*4,storage), o = allocate(xy.byteLength,storage)
+      const out = allocate(4*pixels+count*4+xy.byteLength,GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ)
+      const enc = device.createCommandEncoder()
+      const result = model.encode(enc,moved)
+      enc.copyBufferToBuffer((result.caustic as { buffer: GPUBuffer }).buffer,0,image,0,4*pixels)
+      model.encodeBackward!(enc,moved,result,weights,h,o)
+      enc.copyBufferToBuffer(image,0,out,0,4*pixels)
+      enc.copyBufferToBuffer(h,0,out,4*pixels,count*4)
+      enc.copyBufferToBuffer(o,0,out,4*pixels+count*4,xy.byteLength)
+      device.queue.submit([enc.finish()])
+      await out.mapAsync(GPUMapMode.READ)
+      const all = new Float32Array(out.getMappedRange().slice(0))
+      out.unmap()
+      return [all.subarray(0,pixels),all.subarray(pixels,pixels+count),all.subarray(pixels+count)]
+    }
+    const fromSheet = await gradients(sheetModel), fromPlane = await gradients(planeModel)
+    if (!fromPlane.every(values => values.some(v => Math.abs(v) > 1e-3))) throw new Error('Expected nonzero sheet gradients')
+    let worstXY = 0
+    fromSheet.forEach((values,k) => {
+      let error = 0, scale = 0
+      values.forEach((v,i) => { error += (v-fromPlane[k][i])**2; scale += fromPlane[k][i]**2 })
+      const relative = Math.sqrt(error/Math.max(scale,1e-30))
+      worstXY = Math.max(worstXY,relative)
+      near(relative,0,2e-3,`Sheet scene matches the plane model (${['image','height gradient','x/y gradient'][k]})`)
+    })
+    sheetModel.destroy(); planeModel.destroy()
+    report(`PASS scene design depths, tilted-area target power, far receiver and finite-difference VJP (max relative error ${(100*worst).toFixed(2)}%); displaced sheet scene matches the plane model within ${(100*worstXY).toFixed(3)}%`)
   } finally {
     scene.destroy()
     lens.heightBuffer.destroy()
