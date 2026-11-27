@@ -284,29 +284,10 @@ h3 {
   position: absolute;
   right: 24px;
   bottom: 24px;
+  display: flex;
+  align-items: center;
   width: 292px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-#debug-control {
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
-}
-
-#beam-view {
-  width: 100%;
-  min-width: 0;
-  font-size: 13px;
-}
-
-#view-switch {
-  display: flex;
-  gap: 2px;
+  max-width: calc(100% - 32px);
   padding: 3px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -314,9 +295,94 @@ h3 {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
 }
 
-#view-switch button {
+#view-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+#room-options,
+#debug-control {
   flex: 1;
-  padding: 5px 14px;
+  min-width: 0;
+  margin-left: 5px;
+  border-left: 1px solid var(--line-strong);
+}
+
+#room-options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#room-options:hover {
+  color: var(--ink);
+}
+
+#room-options:has(input:disabled) {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#light-paths {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--ink-faint);
+  border-radius: 999px;
+  background: var(--panel);
+  cursor: inherit;
+}
+
+#light-paths::before {
+  content: '';
+  position: absolute;
+  inset: 2px auto 2px 2px;
+  width: 10px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+}
+
+#light-paths:checked {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+#light-paths:checked::before {
+  transform: translateX(12px);
+  background: var(--panel);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #light-paths::before { transition: transform 0.15s ease; }
+}
+
+@media (forced-colors: active) {
+  #light-paths { appearance: auto; }
+  #light-paths::before { content: none; }
+}
+
+#beam-view {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 22px 5px 10px;
+  border: 0;
+  background-position: right 6px center;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+#view-switch button {
+  padding: 5px 12px;
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -397,15 +463,16 @@ h3 {
   #view-controls {
     right: 16px;
     bottom: 16px;
-    width: min(292px, calc(100% - 32px));
   }
 
-  #app:has(#debug-control:not([hidden])) #design-panel { bottom: 140px; }
+  #view-switch button {
+    padding-inline: 10px;
+  }
 
   #footnote {
     left: 16px;
-    right: 160px;
-    bottom: 22px;
+    right: 16px;
+    bottom: 54px;
   }
 
   #camera-help {

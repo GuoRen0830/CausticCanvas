@@ -1,6 +1,9 @@
 import type { ForwardInput } from '../src/contracts'
 
 type Point = [number, number]
+type ReferenceInput = Pick<ForwardInput, 'optics' | 'receiver'> & {
+  lens: Pick<ForwardInput['lens'], 'columns' | 'rows' | 'sizeX' | 'sizeY'>
+}
 
 function clip(points: Point[], axis: number, boundary: number, greater: boolean) {
   const output: Point[] = []
@@ -30,7 +33,7 @@ function area(points: Point[]) {
 }
 
 // offsets: optional (x, y) displacement per vertex in meters.
-export function reference(input: ForwardInput, heights: ArrayLike<number>, offsets?: ArrayLike<number>) {
+export function reference(input: ReferenceInput, heights: ArrayLike<number>, offsets?: ArrayLike<number>) {
   const { lens, optics, receiver: r } = input
   const image = new Float64Array(r.width * r.height)
   const beams: number[] = []

@@ -6,14 +6,17 @@
   import { checkSceneTraining, checkLargeSceneDispatch } from './scene-training.ts'
   import { checkBaseColor } from './base-color-check.ts'
   import { checkPresentation } from './presentation-check.ts'
+  import { checkUniformIllumination, checkUniformReset } from './uniform-illumination-check.ts'
   const log = line => { document.querySelector('#output').textContent += '\n' + line }
   try {
     await checkObjMesh(log)
+    checkUniformIllumination(log)
     const device = await (await navigator.gpu.requestAdapter()).requestDevice()
     try {
       await checkBaseColor(device, log)
       await checkPresentation(device, log)
       await checkSceneTraining(device, log)
+      if (new URLSearchParams(location.search).has('flood')) await checkUniformReset(device, log)
       if (new URLSearchParams(location.search).has('large')) await checkLargeSceneDispatch(device, log)
     }
     finally { device.destroy() }

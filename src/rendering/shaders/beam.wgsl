@@ -47,6 +47,19 @@ fn present(linear: vec3f) -> vec4f {
   return vec4f(srgb, 1);
 }
 
+fn backdrop(uv: vec2f) -> f32 {
+  return mix(0.018, 0.004, uv.y);
+}
+
+fn surfaceRadiance(pixel: vec2i, surface: vec4f) -> vec3f {
+  var base = surface.rgb;
+  if (!materialLighting) { base *= vec3f(1.0, 0.78, 0.38); }
+  let n = decodeNormal(pixel);
+  let fill = frame.environmentLight * mix(0.35, 1.0, clamp(0.5 - 0.5 * n.z, 0.0, 1.0));
+  let irradiance = smoothedIrradiance(pixel, n);
+  return base * (fill + lampColor * (frame.exposure * irradiance / 3.14159265));
+}
+
 @fragment
 fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let pixel = vec2i(frag.xy);
@@ -70,7 +83,7 @@ fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let surface = textureLoad(albedo, pixel, 0);
   if (surface.a < 0.5) {
     // Dark neutral backdrop, slightly lighter at the top, so the light stands out.
-    return present(mix(vec3f(0.018), vec3f(0.004), uv.y));
+    return present(vec3f(backdrop(uv)));
   }
 
   // Read the unfiltered irradiance so this view exposes sampling noise.
@@ -82,12 +95,5 @@ fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   }
   if (frame.mode == 4u) { return present(surface.rgb); }
 
-  var base = surface.rgb;
-  if (!materialLighting) { base *= vec3f(1.0, 0.78, 0.38); }
-  let n = decodeNormal(pixel);
-  // The lamp shines along +Z, so surfaces facing -Z look up towards it.
-  let fill = frame.environmentLight * mix(0.35, 1.0, clamp(0.5 - 0.5 * n.z, 0.0, 1.0));
-  let irradiance = smoothedIrradiance(pixel, n);
-  let radiance = base * (fill + lampColor * (frame.exposure * irradiance / 3.14159265));
-  return present(filmic(0.9 * radiance));
+  return present(filmic(0.9 * surfaceRadiance(pixel, surface)));
 }

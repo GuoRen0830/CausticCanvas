@@ -96,20 +96,30 @@ export function transportTargets(input: TransportInitInput): { x: Float64Array, 
   if (!(total > 0)) throw new Error('Transport init needs a target with positive power.')
   const sampleX = new Float64Array(count), sampleY = new Float64Array(count)
   let pixel = 0
+  let sumX = 0, sumY = 0, sumRadiusSquared = 0
   for (let s = 0; s < count; s++) {
     const level = (s + next()) / count * total
     while (pixel < cumulative.length - 1 && cumulative[pixel] < level) pixel++
     const px = pixel % width, py = (pixel - px) / width
     sampleX[s] = ((px + next()) / width - 0.5) * input.receiverSizeX
     sampleY[s] = ((py + next()) / height - 0.5) * input.receiverSizeY
+    sumX += sampleX[s]
+    sumY += sampleY[s]
+    sumRadiusSquared += sampleX[s] ** 2 + sampleY[s] ** 2
   }
 
-  // Particles start where a flat lens sends them: straight down.
+  // Match the RMS radius of the drawing before projecting. Starting a tiny
+  // aperture in physical metres makes the first slice stretch it into a line.
+  // Uniformly scaling the source preserves the optimal quadratic-cost pairing.
   const x = new Float64Array(count), y = new Float64Array(count)
+  const targetVariance = Math.max(0, sumRadiusSquared / count - (sumX / count) ** 2 - (sumY / count) ** 2)
+  const sourceVariance = (input.lensSizeX ** 2 * (columns + 1) / (columns - 1) +
+    input.lensSizeY ** 2 * (rows + 1) / (rows - 1)) / 12
+  const magnification = Math.sqrt(targetVariance / sourceVariance)
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < columns; c++) {
-      x[r * columns + c] = (c / (columns - 1) - 0.5) * input.lensSizeX
-      y[r * columns + c] = (r / (rows - 1) - 0.5) * input.lensSizeY
+      x[r * columns + c] = (c / (columns - 1) - 0.5) * input.lensSizeX * magnification
+      y[r * columns + c] = (r / (rows - 1) - 0.5) * input.lensSizeY * magnification
     }
   }
 

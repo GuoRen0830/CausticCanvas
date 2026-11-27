@@ -3,6 +3,9 @@ import { placeObjOnReceiver } from '../src/geometry/place-obj'
 import wedgeObj from './fixtures/wedge.obj?raw'
 import { buildSceneGeometry, sceneVertexStride } from '../src/rendering/scene-mesh'
 import { buildDesignView } from '../src/optics/design-view'
+import { config, sceneLamp } from '../src/config'
+import { transportHeights, transportTargets } from '../src/optimization/transport-init'
+import { reference } from './optics-reference'
 
 function expect(value: boolean, message: string) {
   if (!value) throw new Error('OBJ check: ' + message)
@@ -56,26 +59,66 @@ export async function checkObjMesh(report: (line: string) => void) {
   // Offset Y-up asset: the roof rises toward +X, and its base is at Maya Y=0.
   const lens = { sizeX: 0.2, sizeY: 0.2, thickness: 0.01 }
   const wedge = parseObjMesh(wedgeObj)
-  const fitted = placeObjOnReceiver(wedge, lens, receiver).receiver
+  const { receiver: fitted, height } = placeObjOnReceiver(wedge, lens, receiver)
   const v = wedge.vertices
   expect(Math.abs(v[0] + 0.1) < 1e-6 && Math.abs(v[1] + 0.06) < 1e-6,
-    'center and uniformly scale Maya X/Z inside the aperture')
-  expect(v[2] < receiver.z && receiver.z - v[2] < 1e-4 && v[5] === 1,
+    'center and uniformly scale Maya X/Z inside the fitted receiver')
+  expect(v[2] < fitted.z && fitted.z - v[2] < 1e-4 && v[5] === 1,
     'place the base just above the floor and rotate its downward normal')
   expect(fitted.width === 32 && fitted.height === 19 && Math.abs(fitted.sizeY - 0.12) < 1e-7,
     'the canvas and receiver must fit both dimensions of the model')
+  const lamp = sceneLamp(fitted)
+  const fraction = config.sceneApertureFraction
+  const tilt = Math.atan(lamp.optimizer.maxSurfaceSlope)
+  const deflection = Math.asin((lamp.optics.lensIOR / lamp.optics.outsideIOR) * Math.sin(tilt)) - tilt
+  const cornerShift = 0.5 * (1 - fraction) * Math.hypot(fitted.sizeX, fitted.sizeY)
+  expect(fitted.z < 0.2 && Math.atan2(cornerShift, v[2] - height - lamp.lens.thickness) < deflection,
+    'fit the lamp close to the wedge while leaving enough throw to reach the raised corner')
+  expect(fraction <= 0.12 && Math.abs(lamp.lens.sizeX / fitted.sizeX - fraction) < 1e-6 &&
+    Math.abs(lamp.lens.sizeY / fitted.sizeY - fraction) < 1e-6 &&
+    Math.abs(lamp.lens.thickness / config.lens.thickness - fraction) < 1e-6,
+    'fit a physically smaller, thinner lens over the full rectangular canvas')
+  const lampPower = lamp.optics.incidentIrradiance * lamp.lens.sizeX * lamp.lens.sizeY
+  expect(Math.abs(lampPower - config.optics.incidentIrradiance * fitted.sizeX * fitted.sizeY) < 1e-7,
+    'concentrate the lamp power into the smaller source aperture')
+
+  // A vertical stroke beyond the flat lens footprint still receives refracted light.
+  const grid = 9
+  const strokeStart = 0.23 * fitted.sizeX
+  const target = Float32Array.from({ length: fitted.width * fitted.height }, (_, i) => {
+    const x = ((i % fitted.width + 0.5) / fitted.width - 0.5) * fitted.sizeX
+    return x >= strokeStart && x < strokeStart + 0.12 * fitted.sizeX ? 1 : 0
+  })
+  const transport = { target, width: fitted.width, height: fitted.height,
+    receiverSizeX: fitted.sizeX, receiverSizeY: fitted.sizeY, receiverZ: fitted.z,
+    lensSizeX: lamp.lens.sizeX, lensSizeY: lamp.lens.sizeY, baseHeight: lamp.lens.thickness,
+    columns: grid, rows: grid, eta: lamp.optics.lensIOR / lamp.optics.outsideIOR,
+    maxSlope: lamp.optimizer.maxSurfaceSlope, iterations: 40 }
+  const assigned = transportTargets(transport)
+  const smaller = transportTargets({ ...transport, lensSizeX: lamp.lens.sizeX / 2, lensSizeY: lamp.lens.sizeY / 2 })
+  expect(assigned.x.every((x, i) => Math.hypot(x - smaller.x[i], assigned.y[i] - smaller.y[i]) < 1e-8),
+    'changing the source scale preserves the transport pairing in the drawing')
+  const heights = transportHeights(transport)
+  const { image } = reference({ receiver: fitted, optics: lamp.optics,
+    lens: { ...lamp.lens, columns: grid, rows: grid } }, heights)
+  const strokePower = image.reduce((sum, value, i) => sum + value * target[i], 0) *
+    fitted.sizeX * fitted.sizeY / target.length
+  expect(strokePower > lampPower * 0.25, 'steer light onto a painted strip outside the source footprint')
   const placed = buildDesignView(buildSceneGeometry(fitted, { mesh: wedge }).mesh, fitted)
   const depths = new Float32Array(placed.samples.buffer)
   const roofDepth = (x: number) => depths[2 * (Math.floor(fitted.height / 2) * fitted.width + x) + 1]
-  expect(roofDepth(22) < roofDepth(10) && roofDepth(10) < roofDepth(1) && roofDepth(1) < receiver.z,
+  expect(roofDepth(22) < roofDepth(10) && roofDepth(10) < roofDepth(1) && roofDepth(1) < fitted.z,
     'the transformed roof must be front-facing and rise to the right in the training view')
   const tall = parseObjMesh('v 0 0 0\nv 0 1000 0\nv 1 0 0\nf 1 2 3')
-  placeObjOnReceiver(tall, lens, receiver)
-  expect(tall.vertices[sceneVertexStride + 2] > lens.thickness, 'limit tall assets below the lens')
+  const tower = placeObjOnReceiver(tall, lens, receiver)
+  expect(tower.receiver.z <= receiver.z && tower.height > 0 && tower.receiver.height >= 1 &&
+    tall.vertices[sceneVertexStride + 2] > lamp.lens.thickness, 'fit a tall asset with zero depth below the lens')
   const sheet = parseObjMesh('v 0 0 0\nv 0 0 1\nv 1 0 0\nf 1 2 3')
-  placeObjOnReceiver(sheet, lens, receiver)
-  expect(sheet.vertices[2] === sheet.vertices[sceneVertexStride + 2] && sheet.vertices[5] === -1,
-    'a horizontal sheet with zero height retains its upward-facing normal')
+  const flat = placeObjOnReceiver(sheet, lens, receiver)
+  const flatShift = 0.5 * (1 - fraction) * Math.hypot(flat.width, flat.depth)
+  expect(sheet.vertices[2] === sheet.vertices[sceneVertexStride + 2] && sheet.vertices[5] === -1 &&
+    Math.atan2(flatShift, sheet.vertices[2] - lamp.lens.thickness) < deflection && flat.receiver.z < fitted.z,
+    'a horizontal sheet retains corner reach and needs less clearance than the elevated roof')
 
   const vertices = 'v 0 0 0\nv 1 0 0\nv 0 1 0\n'
   for (const [text, message] of [
@@ -92,5 +135,5 @@ export async function checkObjMesh(report: (line: string) => void) {
     try { parseObjMesh(text) } catch (e) { error = String(e) }
     expect(error.includes(message), 'expected diagnostic ' + message)
   }
-  report('PASS OBJ indices, normals, groups, malformed input, Maya placement and imported roof/floor depths')
+  report('PASS OBJ geometry, fitted optical clearance, roof/floor depths and compact-aperture steering')
 }

@@ -149,10 +149,11 @@ export async function checkSceneTraining(device: GPUDevice, report: (line: strin
 // Only run on request: the beam and triangle-gradient buffers are 128 MiB each.
 export async function checkLargeSceneDispatch(device: GPUDevice, report: (line: string) => void) {
   const lens = createFlatLens(device, { ...config.lens, columns: 2049, rows: 2049 })
-  const receiver = config.receiver
-  const input = { lens, receiver, optics: config.optics }
   const mesh = parseObjMesh(plate)
-  placeObjOnReceiver(mesh, config.lens, receiver)
+  const fitted = placeObjOnReceiver(mesh, config.lens, config.receiver)
+  // Keep the large dispatch's outermost lens vertices over the test floor.
+  const receiver = { ...config.receiver, z: fitted.receiver.z }
+  const input = { lens, receiver, optics: config.optics }
   const view = buildDesignView(buildSceneGeometry(receiver, { mesh }).mesh, receiver)
   const model = await createForwardModel(device, input, { designView: view })
   const optimizer = (await createLensOptimizer(device, input, model, { ...config.optimizer, lossLogInterval: 0 }))!

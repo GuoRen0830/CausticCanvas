@@ -5,6 +5,12 @@ const lensCellsPerSide = 1024
 
 // Startup settings. Reload to apply grid, image, or optical changes.
 export const config = {
+  // Linear aperture coverage of the fitted scene, independent of the drawing area.
+  sceneApertureFraction: 0.10,
+  // This slope lets the compact lamp sit closer while its rays still reach
+  // the scene corners. Total internal reflection starts at about 0.727 in air.
+  sceneLensIOR: 1.7,
+  sceneSurfaceSlope: 0.714,
   lens: {
     columns: lensCellsPerSide + 1,
     rows: lensCellsPerSide + 1,
@@ -18,6 +24,7 @@ export const config = {
     incidentIrradiance: 3,
   } satisfies OpticalConfig,
   receiver: {
+    // Maximum floor distance. Imported scenes fit the lamp height to the model.
     z: 0.5,
     sizeX: 0.4,
     sizeY: 0.4,
@@ -116,17 +123,63 @@ export const config = {
   maxStepsPerFrame: 3,
   rendering: {
     maxPixelRatio: 2,
-    // Presentation controls only; neither value enters the forward model.
-    lensRelief: 4,
+    // Presentation settings are independent of the forward model.
     environmentLight: 0.05,
+    // Display scattering in inverse metres for the thin medium in Room.
+    roomScattering: 1.05,
     // Display only; never changes optical power or the optimization target.
     causticExposure: 1,
     // Light-view exposure once something is drawn, as the panel value of a
     // fully painted pixel that receives its share of the light (x in x/(1+x)).
-    // Exposes for the drawing instead of the unlit scene; 0 keeps causticExposure.
+    // Zero keeps the same exposure used for the initial floodlit scene.
     drawingExposure: 3,
     // Lamp exposure in the lit 3D view once something is drawn, in the same
     // units as drawingExposure. Lower keeps more texture inside the light.
     roomExposure: 6,
   },
 } as const
+
+// The artist paints over the receiver. A smaller, centered collimator supplies
+// the same lamp power through a smaller area. Optical lengths are in metres.
+export function sceneLamp(receiver: Pick<ReceiverPlane, 'sizeX' | 'sizeY'>) {
+  const scale = config.sceneApertureFraction
+  const settings = config.optimizer
+  return {
+    lens: {
+      ...config.lens, sizeX: receiver.sizeX * scale, sizeY: receiver.sizeY * scale,
+      thickness: config.lens.thickness * scale,
+    },
+    optics: { ...config.optics, lensIOR: config.sceneLensIOR,
+      incidentIrradiance: config.optics.incidentIrradiance / (scale * scale) },
+    // Keep smoothing radii in lens grid cells, and each height update in the
+    // same proportion to the vertex spacing. Receiver-pixel filters keep their units.
+    optimizer: {
+      ...settings,
+      maxSurfaceSlope: config.sceneSurfaceSlope,
+      learningRate: settings.learningRate * scale,
+      coarseLearningRate: settings.coarseLearningRate * scale,
+      refineLearningRate: settings.refineLearningRate * scale,
+      curvatureLengthScale: settings.curvatureLengthScale * scale,
+      gradientSmoothingSigma: settings.gradientSmoothingSigma * scale,
+      updateSmoothingSigma: settings.updateSmoothingSigma * scale,
+      xySmoothingSigma: settings.xySmoothingSigma * scale,
+      minHeight: settings.minHeight * scale,
+    },
+  }
+}
+
+// Axial throw needed per metre of receiver radius. A homothetic light field
+// moves a ray at aperture radius f*r outwards by (1-f)*r. The extra distance
+// budgets the rising rim of the diverging exit surface above the peripheral rays.
+export function sceneThrowPerRadius() {
+  const f = config.sceneApertureFraction
+  const tilt = Math.atan(config.sceneSurfaceSlope)
+  const eta = config.sceneLensIOR / config.optics.outsideIOR
+  const bend = Math.abs(Math.asin(Math.min(1, eta * Math.sin(tilt))) - tilt)
+  return (1 - f) / Math.max(1e-6, Math.tan(bend)) + 0.6 * f
+}
+
+// Visible air above the flat entry face of the lens, in optical meters.
+export function incidentColumnHeight(receiverZ: number, apertureSpan: number) {
+  return Math.min(0.25 * receiverZ, 0.14 * apertureSpan)
+}

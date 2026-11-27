@@ -6,6 +6,7 @@ Run `npm ci`, then `npm run dev`. Open these paths on the local server in a WebG
 | --- | --- |
 | `/check/import-check.html` | OBJ topology, unit-independent fitting, material paths, UV orientation, presentation isolation and scene-training gradients |
 | `/check/import-check.html?large` | Includes the 2048 × 2048 lens dispatch regression |
+| `/check/import-check.html?flood` | Includes a production-resolution scene session, painted stroke and restoration of the initial flood after clearing |
 | `/check/optics-check.html` | Independent CPU image/flux comparisons, finite-difference gradients, output clearing, and resource contracts |
 | `/check/optimizer-check.html` | Target normalization, loss and regularization gradients, Adam updates, and optimizer lifecycle |
 | `/check/loss-filter-check.html` | GPU Gaussian-filter gradients against CPU finite differences, including boundaries and non-square images |
@@ -21,7 +22,7 @@ The integration page also supports `shape=offset` and `shape=bar`, and `strategy
 
 - `optics-reference.ts` is an independent CPU polygon-integration reference used only by optical checks. It is not a production CPU solver.
 - The optimizer check uses a small analytic forward model to isolate optimizer errors. The integration check uses the real optical forward and backward model.
-- The presentation check renders every debug mode and compares GPU readbacks. Environment fill only changes Room; lens relief only changes Glass. Lens heights, refracted beams, first hits and solver irradiance must stay byte-identical.
+- The presentation check captures the prism and refracted light from the side to verify that one Room switch toggles both. It also checks the debug views and compares the optical buffers byte for byte. Controlled beams check first-hit clipping and equal-length paths viewed from above, near the rim and from opposite ends. A ray crossing 48 thin layers should integrate to the same energy as a uniform field with the same mean. At fixed fluence, a narrow ridge must appear brighter than a broad sheet. Neighbouring light alone must leave empty voxels dark. The separate ribbon fixture covers the earlier line renderer.
 - Debug irradiance uses a fixed logarithmic scale relative to incident irradiance, without Room smoothing, environment fill or drawing-dependent exposure.
 - Splat candidates counts projected bounding rectangles before visibility/coverage rejection. It describes screen-space rendering workload and varies with camera and viewport resolution, rather than measuring received energy.
 - Optical backward differentiates refraction, polygon clipping, and projected-area normalization, then gathers adjacent triangle derivatives into vertex gradients. Derivatives are piecewise; exact clipping topology changes need separate analysis.

@@ -12,6 +12,8 @@ export interface LensState {
   // Row-major f32 values, starting at byte offset 0.
   // All shared height buffers require STORAGE | COPY_SRC | COPY_DST.
   heightBuffer: GPUBuffer
+  // Initial flat exit height in metres, used when seeding a fresh design.
+  flatThickness?: number
 
   // Optional XY displacement of each vertex from its uniform grid position, in
   // meters: row-major vec2<f32> (x, y) per vertex, starting at byte offset 0.
@@ -38,7 +40,9 @@ export interface TriangleBeamField {
   // GPU readers must use the matching height data, before either buffer is reused.
   readonly lens: Readonly<LensState>
 
-  // One uniform parallel beam per triangle, in buildLensIndices order.
+  // One uniform parallel beam per triangle in row-major cell order.
+  // For cell corners a, b on the first row and c, d on the next,
+  // the triangles are (a, b, c) and (b, d, c).
   // Count: 2 * (lens.columns - 1) * (lens.rows - 1); no compaction.
   // STORAGE array<vec4<f32>>, byte offset 0, 16-byte stride.
   // xyz: unit propagation direction in lens-local coordinates.
@@ -209,7 +213,7 @@ export interface AppState {
   // Latest drawing snapshot, including an empty target.
   target: TargetImage | null
 
-  // Current lens geometry used by the preview.
+  // Current lens geometry used by the optical simulation.
   lens: LensState
 
   // Optical inputs shared by the forward model and optimizer.

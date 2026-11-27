@@ -3,20 +3,28 @@ import { mat4 } from 'wgpu-matrix'
 export interface OrbitCameraOptions {
   target: [number, number, number]
   size: [number, number, number]
+  azimuth?: number
+  elevation?: number
+  // Optional overhead lamp, centered above the subject. Its top and footprint
+  // influence the initial shot while the subject remains the orbit pivot.
+  lampTop?: { y: number; width: number; depth: number }
 }
+
+const standardElevation = Math.PI / 4
 
 export function createOrbitCamera(
   canvas: HTMLCanvasElement,
-  { target, size }: OrbitCameraOptions,
+  initial: OrbitCameraOptions,
   onChange: () => void,
 ) {
-  const initialAzimuth = Math.atan2(1.3, 1.8)
-  const initialElevation = Math.PI / 4
+  const standardAzimuth = Math.atan2(1.3, 1.8)
   const verticalFov = Math.PI / 4
   const elevationLimit = Math.PI / 2 - 0.01
-  let azimuth = initialAzimuth
-  let elevation = initialElevation
+  let framing = initial
+  let azimuth = initial.azimuth ?? standardAzimuth
+  let elevation = initial.elevation ?? standardElevation
   let zoomFactor = 1
+  const poses = new WeakMap<OrbitCameraOptions, { azimuth: number; elevation: number; zoomFactor: number }>()
   let activePointer: number | null = null
   let previousX = 0
   let previousY = 0
@@ -26,21 +34,31 @@ export function createOrbitCamera(
   const projection = mat4.identity()
   const viewProjection = mat4.identity()
 
-  // Fit all eight corners in the initial view. Zoom and orbit remain independent.
-  function fitDistance(aspect: number) {
-    const sin = Math.sin(initialAzimuth), cos = Math.cos(initialAzimuth)
+  // Fit the subject and inlet separately. A single box as wide as the whole
+  // model at lamp height would make the camera back away into empty space.
+  function fitDistance(aspect: number, verticalShift: number) {
+    const { size, target, lampTop, elevation: initialElevation = standardElevation } = framing
+    const heading = framing.azimuth ?? standardAzimuth
+    const sin = Math.sin(heading), cos = Math.cos(heading)
     const up = Math.sin(initialElevation), horizontal = Math.cos(initialElevation)
     const tanY = Math.tan(verticalFov / 2)
+    const edge = 1 / 1.12
     let distance = 0
+    function include(x: number, y: number, z: number) {
+      const along = x * sin + z * cos
+      const depth = along * horizontal + y * up
+      const projectedY = y * horizontal - along * up
+      const halfX = Math.abs(x * cos - z * sin) / (aspect * edge)
+      const halfY = Math.abs(projectedY) / (edge - Math.sign(projectedY) * verticalShift)
+      distance = Math.max(distance, depth + Math.max(halfX, halfY) / tanY)
+    }
     for (const x of [-size[0] / 2, size[0] / 2])
       for (const y of [-size[1] / 2, size[1] / 2])
-        for (const z of [-size[2] / 2, size[2] / 2]) {
-          const along = x * sin + z * cos
-          const depth = along * horizontal + y * up
-          const halfX = Math.abs(x * cos - z * sin)
-          const halfY = Math.abs(y * horizontal - along * up)
-          distance = Math.max(distance, depth + 1.12 * Math.max(halfX / aspect, halfY) / tanY)
-        }
+        for (const z of [-size[2] / 2, size[2] / 2]) include(x, y, z)
+    if (lampTop) {
+      for (const x of [-lampTop.width / 2, lampTop.width / 2])
+        for (const z of [-lampTop.depth / 2, lampTop.depth / 2]) include(x, lampTop.y - target[1], z)
+    }
     return distance
   }
 
@@ -101,8 +119,8 @@ export function createOrbitCamera(
 
   const reset = () => {
     releasePointer()
-    azimuth = initialAzimuth
-    elevation = initialElevation
+    azimuth = framing.azimuth ?? standardAzimuth
+    elevation = framing.elevation ?? standardElevation
     zoomFactor = 1
     onChange()
   }
@@ -119,21 +137,32 @@ export function createOrbitCamera(
 
   return {
     frame(next: OrbitCameraOptions) {
-      target = next.target
-      size = next.size
-      reset()
+      if (framing === next) return
+      releasePointer()
+      poses.set(framing, { azimuth, elevation, zoomFactor })
+      framing = next
+      const saved = poses.get(next)
+      azimuth = saved?.azimuth ?? next.azimuth ?? standardAzimuth
+      elevation = saved?.elevation ?? next.elevation ?? standardElevation
+      zoomFactor = saved?.zoomFactor ?? 1
+      onChange()
     },
 
     update(aspect: number) {
       // Y is up; azimuth turns around Y and elevation rises above XZ.
-      const span = Math.max(...size)
-      const distance = fitDistance(aspect) * zoomFactor
+      const { size, target, lampTop } = framing
+      const span = Math.max(...size, lampTop ? lampTop.y - target[1] : 0)
+      // Give the lamp headroom above the subject through an off-axis
+      // projection. The optical setup never moves the center of rotation.
+      const verticalShift = lampTop ? -0.14 : 0
+      const distance = fitDistance(aspect, verticalShift) * zoomFactor
       const horizontalDistance = distance * Math.cos(elevation)
       eye[0] = target[0] + horizontalDistance * Math.sin(azimuth)
       eye[1] = target[1] + distance * Math.sin(elevation)
       eye[2] = target[2] + horizontalDistance * Math.cos(azimuth)
       mat4.lookAt(eye, target, [0, 1, 0], view)
       mat4.perspective(verticalFov, aspect, span * 0.005, distance + span * 2, projection)
+      projection[9] = -verticalShift
       // Borrowed matrix, reused on the next update.
       return mat4.multiply(projection, view, viewProjection)
     },
