@@ -1,9 +1,10 @@
-import { config } from '../src/config'
-import { createFlatLens } from '../src/geometry/lens-mesh'
+import { config, sceneLamp } from '../src/config'
+import { createFlatLens, createLens } from '../src/geometry/lens-mesh'
 import { buildDesignView } from '../src/optics/design-view'
 import { createForwardModel } from '../src/optics/forward-model'
 import { createLensOptimizer, type OptimizerSettings } from '../src/optimization/lens-optimizer'
 import { lensShapeMetrics } from '../src/optimization/lens-metrics'
+import { uniformIlluminationHeights } from '../src/optimization/uniform-illumination'
 import { buildSceneGeometry } from '../src/rendering/scene-mesh'
 import { createSimulation } from '../src/simulation'
 import type { ForwardResult } from '../src/contracts'
@@ -31,8 +32,6 @@ function log(value: unknown) {
 async function run() {
   const query = new URLSearchParams(location.search)
   const number = (key: string, fallback: number) => query.has(key) ? Number(query.get(key)) : fallback
-  const settings: { -readonly [K in keyof OptimizerSettings]: number } = { ...config.optimizer, lossLogInterval: 0 }
-  for (const key of Object.keys(settings) as (keyof OptimizerSettings)[]) settings[key] = number(key, settings[key])
   const grid = number('grid', 33), every = number('every', 250), timingSteps = number('timing', 20)
 
   const adapter = (await navigator.gpu.requestAdapter())!
@@ -59,10 +58,13 @@ async function run() {
   if (!(sceneId in bundledScenes)) throw new Error('Unknown scene ' + sceneId)
   const { mesh } = await readBundledScene(sceneId)
   const { receiver } = placeObjOnReceiver(mesh, config.lens, config.receiver)
-  const lensSpec = { ...config.lens, columns: grid, rows: grid, sizeX: receiver.sizeX, sizeY: receiver.sizeY }
-  const lens = createFlatLens(device, lensSpec)
-  const state = { lens, receiver, optics: config.optics, target: null }
+  const lamp = sceneLamp(receiver)
+  const settings: { -readonly [K in keyof OptimizerSettings]: number } = { ...lamp.optimizer, lossLogInterval: 0 }
+  for (const key of Object.keys(settings) as (keyof OptimizerSettings)[]) settings[key] = number(key, settings[key])
+  const lensSpec = { ...lamp.lens, columns: grid, rows: grid }
   const view = buildDesignView(buildSceneGeometry(receiver, { mesh }).mesh, receiver)
+  const lens = createLens(device, lensSpec, uniformIlluminationHeights(lensSpec, lamp.optics, receiver, view))
+  const state = { lens, receiver, optics: lamp.optics, target: null }
   const solver = (await createForwardModel(device, state, { designView: view, timestamps }))!
   // Coarse-to-fine runs need a forward model on the coarse grid as well.
   // The default coarse grid only applies where it properly divides this grid.
@@ -280,7 +282,7 @@ function relativeDump(image: Float32Array, weights: Float32Array, areas: Float32
 // f = all of it, log scale); creaseMap: largest stretch in the block
 // (4 = 1 px, 8 = 10 px, 12 = 100 px).
 async function diagnoseSpill(device: GPUDevice, result: ForwardResult, grid: number,
-  lens: { sizeX: number, sizeY: number }, receiver: { width: number, height: number },
+  lens: { sizeX: number, sizeY: number }, receiver: { width: number, height: number, sizeX: number, sizeY: number },
   weights: Float32Array, offsets?: Float32Array) {
   const faces = 2 * (grid - 1) * (grid - 1), cells = grid - 1
   async function readAll(source: GPUBuffer, bytes: number) {
@@ -311,8 +313,8 @@ async function diagnoseSpill(device: GPUDevice, result: ForwardResult, grid: num
       cy += ((Math.floor(v / grid) / cells - 0.5) * lens.sizeY + (offsets?.[2 * v + 1] ?? 0)) / 3
     }
     const t = hitT[2 * f + 1]
-    landX[f] = ((cx + t * beams[4 * f]) / lens.sizeX + 0.5) * width
-    landY[f] = ((cy + t * beams[4 * f + 1]) / lens.sizeY + 0.5) * height
+    landX[f] = ((cx + t * beams[4 * f]) / receiver.sizeX + 0.5) * width
+    landY[f] = ((cy + t * beams[4 * f + 1]) / receiver.sizeY + 0.5) * height
   }
   const apart = (f: number, g: number) => g < 0 || Number.isNaN(landX[g]) ? 0
     : Math.hypot(landX[f] - landX[g], landY[f] - landY[g])

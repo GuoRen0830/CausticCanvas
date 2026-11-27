@@ -25,8 +25,10 @@ export async function checkBaseColor(device: GPUDevice, report: (line: string) =
   const swatches = materials.get('Swatches')!
   if (warnings.size || swatches.map !== png || !swatches.clamp) throw new Error('Incorrect relative map_Kd resolution.')
   swatches.color[0] = 0.5 // Test Kd multiplication between texture decode and output encoding.
-  const receiver = { width: 64, height: 64, sizeX: 0.16, sizeY: 0.16, z: 0.5 }
-  placeObjOnReceiver(mesh, { sizeX: 0.16, sizeY: 0.16, thickness: 0.01 }, receiver)
+  const limits = { width: 64, height: 64, sizeX: 0.16, sizeY: 0.16, z: 0.5 }
+  const fitted = placeObjOnReceiver(mesh, { sizeX: 0.16, sizeY: 0.16, thickness: 0.01 }, limits)
+  // The swatch pixel coordinates are calibrated on a square raster.
+  const receiver = { ...limits, z: fitted.receiver.z }
   const geometry = buildSceneGeometry(receiver, { mesh })
   const design = buildDesignView(geometry.mesh, receiver)
   const renderer = await createSceneRenderer(device, geometry.mesh, mat4.identity(), materials, w => { throw new Error(w) })

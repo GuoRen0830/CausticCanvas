@@ -12,7 +12,6 @@ export async function initializeGPU(canvas: HTMLCanvasElement, lens: Pick<LensSt
   }
 
   // Scene optics stores one vec4 per face for beams and another for gradients.
-  // Lens inspection also draws three uint32 indices per face.
   const faces = 2 * (lens.columns - 1) * (lens.rows - 1)
   const storageBytes = Math.max(faces * 16, lens.columns * lens.rows * 8)
   if (storageBytes > adapter.limits.maxStorageBufferBindingSize || storageBytes > adapter.limits.maxBufferSize) {

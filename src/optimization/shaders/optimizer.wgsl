@@ -351,7 +351,7 @@ fn faceSlopeGradient(ids: vec3<u32>, j: u32) -> f32 {
   return dot(slopePenaltyGradient(g.x, g.y), basis[j] / doubleArea);
 }
 
-// Faces follow buildLensIndices: (a, b, c) and (b, d, c) per cell.
+// The optical grid uses triangles (a, b, c) and (b, d, c) per cell.
 fn cellFaces(cellColumn: u32, cellRow: u32) -> array<vec3<u32>, 2> {
   let a = vertexIndex(cellColumn, cellRow);
   let w = params.gridSize.x;

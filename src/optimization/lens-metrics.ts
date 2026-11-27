@@ -74,7 +74,7 @@ export function lensShapeMetrics(
         continue
       }
       const ha = heights[a], hb = heights[a + 1], hc = heights[a + columns], hd = heights[a + columns + 1]
-      // Faces follow buildLensIndices: (a, b, c) and (b, d, c).
+      // The optical grid uses triangles (a, b, c) and (b, d, c).
       slope((hb - ha) / dx, (hc - ha) / dy)
       slope((hd - hc) / dx, (hd - hb) / dy)
     }
@@ -93,7 +93,7 @@ export function lensShapeMetrics(
   }
 }
 
-// The two faces of the cell whose lower-left vertex is a (buildLensIndices order).
+// The two faces of the cell whose lower-left vertex is a, in beam order.
 function cellFaces(a: number, columns: number): [number, number, number][] {
   const b = a + 1, c = a + columns, d = c + 1
   return [[a, b, c], [b, d, c]]

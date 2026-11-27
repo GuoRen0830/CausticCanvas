@@ -60,6 +60,14 @@
       </aside>
 
       <div id="view-controls">
+        <div id="view-switch" role="group" aria-label="View">
+          <button type="button" data-view="lit" aria-pressed="true">Room</button>
+          <button type="button" data-view="debug" aria-pressed="false">Debug</button>
+        </div>
+        <label id="room-options" title="Show the prism and light beams in the room">
+          Glass &amp; beams
+          <input type="checkbox" role="switch" id="light-paths" aria-controls="gpu-canvas" checked disabled />
+        </label>
         <div id="debug-control" hidden>
           <select id="beam-view" aria-label="Debug view">
             <option value="irradiance">Surface irradiance</option>
@@ -67,11 +75,6 @@
             <option value="normals">Surface normals</option>
             <option value="albedo">Base color</option>
           </select>
-        </div>
-        <div id="view-switch" role="group" aria-label="View">
-          <button type="button" data-view="lit" aria-pressed="true">Room</button>
-          <button type="button" data-view="lens" aria-pressed="false">Glass</button>
-          <button type="button" data-view="debug" aria-pressed="false">Debug</button>
         </div>
       </div>
 

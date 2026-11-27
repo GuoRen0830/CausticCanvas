@@ -1,6 +1,6 @@
 import './style.css'
 import { mat4 } from 'wgpu-matrix'
-import { config } from './config'
+import { config, incidentColumnHeight } from './config'
 import { initializeGPU } from './gpu/context'
 import { createDrawingPad } from './ui/drawing-pad'
 import { bundledScenes, defaultScene, readBundledScene, type BundledScene } from './geometry/bundled-scenes'
@@ -31,9 +31,12 @@ async function main() {
   const folderButton = element('import-folder', 'button'), folderInput = element('asset-folder', 'input')
   const sceneSelect = element('bundled-scene', 'select'), beamSelect = element('beam-view', 'select')
   const credit = element('scene-credit', 'a')
+  const topbar = element('topbar', 'header')
   const panel = element('design-panel', 'aside'), undoButton = element('undo-target', 'button')
   const brushSize = element('brush-size', 'input')
   const debugControl = element('debug-control', 'div')
+  const roomOptions = element('room-options', 'label')
+  const lightPaths = element('light-paths', 'input')
   const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#view-switch button[data-view]'))
   let currentView: BeamView = 'lit'
   for (const [id, preset] of Object.entries(bundledScenes)) sceneSelect.add(new Option(preset.name, id))
@@ -53,7 +56,7 @@ async function main() {
 
   lifetime.signal.addEventListener('abort', () => {
     importButton.disabled = folderButton.disabled = true
-    sceneSelect.disabled = true
+    sceneSelect.disabled = lightPaths.disabled = true
     frameLoop?.destroy()
     camera?.destroy()
     pad?.destroy()
@@ -75,13 +78,14 @@ async function main() {
   if (!previewContext) throw new Error('Failed to create caustic canvas context.')
   const { receiver, lens } = config
   previewContext.configure({ device, format, alphaMode: 'opaque' })
-  const opticalToWorld = mat4.multiply(mat4.translation([0, receiver.z, 0]), mat4.rotationX(Math.PI / 2))
   const defaultFraming: OrbitCameraOptions = {
     target: [0, (receiver.z - lens.thickness) / 2, 0],
     size: [lens.sizeX, receiver.z, lens.sizeY],
   }
-  let sceneFraming = defaultFraming, lensFraming = defaultFraming, currentFraming = defaultFraming
+  let roomFraming = defaultFraming, sceneFraming = defaultFraming
+  let currentFraming = defaultFraming
   camera = createOrbitCamera(canvas, defaultFraming, () => frameLoop?.requestFrame())
+  const viewportTransform = mat4.identity()
 
   const seconds = () => Math.round((performance.now() - runStarted) / 1000)
   function updateRunState() {
@@ -98,7 +102,7 @@ async function main() {
     if (!active?.canOptimize) {
       causticStatus.textContent = active?.state.optics.incidentIrradiance === 0 ? 'The lamp is off' : 'Preview only'
     } else if (!hasTarget) {
-      causticStatus.textContent = 'Plain glass'
+      causticStatus.textContent = 'Scene lighting'
     } else if (optimizationDone) {
       causticStatus.textContent = runStarted ? `Done in ${seconds()} s` : 'Done'
     } else {
@@ -108,9 +112,10 @@ async function main() {
 
   function changeView(mode: BeamView = currentView) {
     currentView = mode
-    const debug = mode !== 'lit' && mode !== 'lens'
+    const debug = mode !== 'lit'
     debugControl.hidden = !debug
-    const framing = mode === 'lens' ? lensFraming : sceneFraming
+    roomOptions.hidden = debug
+    const framing = debug ? sceneFraming : roomFraming
     if (currentFraming !== framing) {
       camera!.frame(framing)
       currentFraming = framing
@@ -119,6 +124,10 @@ async function main() {
     frameLoop?.requestFrame()
   }
   beamSelect.addEventListener('change', () => changeView(beamSelect.value as BeamView), events)
+  lightPaths.addEventListener('change', () => {
+    active?.setLightPathsVisible(lightPaths.checked)
+    frameLoop?.requestFrame()
+  }, events)
   for (const button of viewButtons) {
     button.addEventListener('click', () => {
       changeView((button.dataset.view === 'debug' ? beamSelect.value : button.dataset.view) as BeamView)
@@ -132,16 +141,29 @@ async function main() {
   function drawSceneFrame(scene: SceneSession, steps: number, mode: BeamView) {
     const ratio = Math.min(window.devicePixelRatio, config.rendering.maxPixelRatio)
     const limit = device.limits.maxTextureDimension2D
-    const width = Math.min(limit, Math.max(1, Math.round(canvas.clientWidth * ratio)))
-    const height = Math.min(limit, Math.max(1, Math.round(canvas.clientHeight * ratio)))
+    const cssWidth = Math.max(1, canvas.clientWidth), cssHeight = Math.max(1, canvas.clientHeight)
+    const width = Math.min(limit, Math.max(1, Math.round(cssWidth * ratio)))
+    const height = Math.min(limit, Math.max(1, Math.round(cssHeight * ratio)))
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width
       canvas.height = height
     }
     const encoder = device.createCommandEncoder()
-    const viewProjection = camera!.update(width / height)
-    const covered = canvas.clientWidth > 760 ? panel.getBoundingClientRect().right : 0
-    if (covered > 0) mat4.multiply(mat4.translation([covered / canvas.clientWidth, 0, 0]), viewProjection, viewProjection)
+    const panelRect = panel.getBoundingClientRect()
+    const wide = cssWidth > 760
+    const left = wide ? panelRect.right / cssWidth : 0
+    const top = mode === 'lit' ? topbar.getBoundingClientRect().bottom / cssHeight : 0
+    const bottom = mode === 'lit' && !wide ? panelRect.top / cssHeight : 1
+    // Fit Room in the visible rectangle. The projection still maps to the full
+    // canvas, so camera rays and G-buffer depth keep the same pixel coordinates.
+    const widthFraction = mode === 'lit' ? 1 - left : 1
+    const heightFraction = Math.max(0.01, bottom - top)
+    const viewProjection = camera!.update((width / height) * widthFraction / heightFraction)
+    viewportTransform[0] = widthFraction
+    viewportTransform[5] = heightFraction
+    viewportTransform[12] = left
+    viewportTransform[13] = 1 - top - bottom
+    mat4.multiply(viewportTransform, viewProjection, viewProjection)
     const done = scene.render(encoder, context.getCurrentTexture(), previewContext!.getCurrentTexture(),
       viewProjection, mode, steps)
     return { done, commands: encoder.finish() }
@@ -156,6 +178,7 @@ async function main() {
   async function loadScene(source: BundledScene | File, files: File[] = []) {
     if (switching || events.signal.aborted) return
     switching = true
+    lightPaths.disabled = true
     importButton.disabled = folderButton.disabled = sceneSelect.disabled = true
     const name = typeof source === 'string' ? bundledScenes[source].name : source.name
     sceneStatus.textContent = `Loading ${name}…`
@@ -168,6 +191,8 @@ async function main() {
       warnings = asset.warnings
       const bounds = placeObjOnReceiver(asset.mesh, lens, receiver)
       const fitted = bounds.receiver
+      // Place the fitted receiver on the world floor, with the lamp directly above it.
+      const opticalToWorld = mat4.multiply(mat4.translation([0, fitted.z, 0]), mat4.rotationX(Math.PI / 2))
       const geometry = buildSceneGeometry(fitted, { mesh: asset.mesh })
       geometry.materials = asset.materials
       const framing: OrbitCameraOptions = {
@@ -192,6 +217,7 @@ async function main() {
       try {
         candidate = await createSceneSession(device, format, opticalToWorld, geometry, fitted, designView, message => warnings.add(message))
         if (events.signal.aborted) return
+        candidate.setLightPathsVisible(lightPaths.checked)
         // Include G-buffer allocation and first-hit splatting in the same validation scope.
         device.queue.submit([drawSceneFrame(candidate, 0, 'lit').commands])
         await device.queue.onSubmittedWorkDone()
@@ -204,9 +230,8 @@ async function main() {
 
       const next = candidate
       const newPad = createDrawingPad(targetCanvas, fitted, target => {
-        next.state.target = target
+        hasTarget = next.setTarget(target)
         optimizationDone = false
-        hasTarget = target.values.some(value => value > 0)
         if (runTimer !== undefined) runStarted = performance.now()
         updateRunState()
         frameLoop?.requestFrame()
@@ -218,7 +243,12 @@ async function main() {
       active = next
       candidate = undefined
       sceneFraming = framing
-      lensFraming = { target: [0, fitted.z - lens.thickness, 0], size: [fitted.sizeX, lens.thickness, fitted.sizeY] }
+      const aperture = next.state.lens
+      const roomHeight = fitted.z + incidentColumnHeight(fitted.z, Math.max(aperture.sizeX, aperture.sizeY))
+      roomFraming = {
+        ...sceneFraming, azimuth: 0.65,
+        lampTop: { y: roomHeight, width: aperture.sizeX, depth: aperture.sizeY },
+      }
       causticCanvas.width = fitted.width
       causticCanvas.height = fitted.height
       for (const c of [targetCanvas, causticCanvas]) {
@@ -251,6 +281,7 @@ async function main() {
       switching = false
       if (!events.signal.aborted) importButton.disabled = folderButton.disabled = sceneSelect.disabled = false
       if (!events.signal.aborted && active) {
+        lightPaths.disabled = false
         frameLoop ??= createFrameLoop(device, encodeFrame, { maxStepsPerFrame: config.maxStepsPerFrame, onError: fail })
         updateRunState()
         frameLoop.requestFrame()

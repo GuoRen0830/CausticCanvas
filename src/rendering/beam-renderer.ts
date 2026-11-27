@@ -1,15 +1,18 @@
 import { mat4 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
+import { config } from '../config'
 import type { ForwardResult } from '../contracts'
 import { sceneAlbedoFormat, type SceneGeometry } from './scene-mesh'
+import { createRoomLightPaths } from './room-light-paths'
 import commonShader from './shaders/beam-common.wgsl?raw'
 import coverageShader from './shaders/pixel-coverage.wgsl?raw'
 import hitTypes from './shaders/scene-hit.wgsl?raw'
 import splatShader from './shaders/hit-splat.wgsl?raw'
 import beamShader from './shaders/beam.wgsl?raw'
+import roomCompositeShader from './shaders/room-composite.wgsl?raw'
 
-export type BeamView = 'lit' | 'candidates' | 'irradiance' | 'normals' | 'albedo' | 'lens'
 const modeId = { lit: 0, candidates: 1, irradiance: 2, normals: 3, albedo: 4 }
+export type BeamView = keyof typeof modeId
 
 const clear = (view: GPUTextureView): GPURenderPassColorAttachment => ({
   view, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0],
@@ -18,9 +21,11 @@ const clear = (view: GPUTextureView): GPURenderPassColorAttachment => ({
 export function createBeamRenderer(
   device: GPUDevice, canvasFormat: GPUTextureFormat,
   opticalToWorld: Mat4, initialExposure: number, { mesh, materials }: SceneGeometry,
+  relativeIOR = config.optics.lensIOR / config.optics.outsideIOR,
 ) {
   let exposure = initialExposure
-  let environmentLight = 0, referenceIrradiance = 1
+  let environmentLight = 0, incidentIrradiance = 1
+  let lightPathsVisible = true
   const data = new Float32Array(44)
   const words = new Uint32Array(data.buffer)
   const localVP = data.subarray(0, 16)
@@ -29,7 +34,7 @@ export function createBeamRenderer(
     label: 'Beam frame', size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   const module = device.createShaderModule({
-    label: 'Scene beam rendering', code: [commonShader, coverageShader, beamShader, hitTypes, splatShader].join('\n'),
+    label: 'Scene beam rendering', code: [commonShader, coverageShader, beamShader, roomCompositeShader, hitTypes, splatShader].join('\n'),
   })
   const fieldLayout = device.createBindGroupLayout({
     entries: [0, 1, 2].map(binding => ({
@@ -63,17 +68,27 @@ export function createBeamRenderer(
     primitive: { topology: 'triangle-strip' },
   })
   const compositeLayout = frameLayout([
+    { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
     { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
     { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
     { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
   ])
-  const composite = device.createRenderPipeline({
-    label: 'Scene composite', layout: device.createPipelineLayout({ bindGroupLayouts: [compositeLayout] }), vertex: { module, entryPoint: 'fullscreenVS' },
-    fragment: { module, entryPoint: 'compositeFS', targets: [{ format: canvasFormat }], constants: {
-      materialLighting: Number(!!materials?.size),
-      encodeCanvas: Number(canvasFormat === 'rgba8unorm' || canvasFormat === 'bgra8unorm'),
-    } },
+  const pathLayout = device.createBindGroupLayout({
+    entries: [3, 4].map(binding => ({ binding, visibility: GPUShaderStage.FRAGMENT, texture: {} })),
   })
+  function compositePipeline(entryPoint: string, layouts: GPUBindGroupLayout[]) {
+    return device.createRenderPipeline({
+      label: entryPoint, layout: device.createPipelineLayout({ bindGroupLayouts: layouts }),
+      vertex: { module, entryPoint: 'fullscreenVS' },
+      fragment: { module, entryPoint, targets: [{ format: canvasFormat }], constants: {
+        materialLighting: Number(!!materials?.size),
+        encodeCanvas: Number(canvasFormat === 'rgba8unorm' || canvasFormat === 'bgra8unorm'),
+      } },
+    })
+  }
+  const composite = compositePipeline('compositeFS', [compositeLayout])
+  const roomComposite = compositePipeline('roomPathsFS', [compositeLayout, pathLayout])
+  let paths: ReturnType<typeof createRoomLightPaths> | undefined
   const uniformEntry = { binding: 0, resource: { buffer: uniform } }
   function texture(label: string, format: GPUTextureFormat, width: number, height: number) {
     return device.createTexture({
@@ -96,7 +111,8 @@ export function createBeamRenderer(
     ] })
     const compositeGroup = device.createBindGroup({
       layout: composite.getBindGroupLayout(0),
-      entries: [uniformEntry, normalEntry, { binding: 3, resource: albedoView }, { binding: 4, resource: lightView }],
+      entries: [uniformEntry, { binding: 1, resource: depthView }, normalEntry,
+        { binding: 3, resource: albedoView }, { binding: 4, resource: lightView }],
     })
     return {
       width, height, albedoView, normalView, depthView, lightView, objectView, splatGroup, compositeGroup,
@@ -135,24 +151,18 @@ export function createBeamRenderer(
       environmentLight = value
     },
     setReferenceIrradiance(value: number) {
-      referenceIrradiance = Math.max(value, 1e-6)
+      incidentIrradiance = value
+    },
+    setLightPathsVisible(value: boolean) {
+      lightPathsVisible = value
     },
 
     render(
       encoder: GPUCommandEncoder, output: GPUTexture, viewProjection: Mat4,
       mode: BeamView, result: ForwardResult,
-      drawScene: (pass: GPURenderPassEncoder) => void, drawLens: (pass: GPURenderPassEncoder) => void,
+      drawScene: (pass: GPURenderPassEncoder) => void,
+      training = false,
     ) {
-      if (mode === 'lens') {
-        const targets = screenFor(output)
-        const pass = encoder.beginRenderPass({
-          label: 'Inspect lens shape', colorAttachments: [{ view: output.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0.07, 0.07, 0.075, 1] }],
-          depthStencilAttachment: { view: targets.depthView, depthLoadOp: 'clear', depthClearValue: 1, depthStoreOp: 'discard' },
-        })
-        drawLens(pass)
-        pass.end()
-        return
-      }
       const { beams: field } = result
       const lens = field.lens
       const count = 2 * (lens.columns - 1) * (lens.rows - 1)
@@ -173,7 +183,7 @@ export function createBeamRenderer(
       words.set([lens.columns, lens.rows], 32)
       data.set([lens.sizeX, lens.sizeY], 34)
       data[36] = environmentLight
-      data[37] = referenceIrradiance
+      data[37] = Math.max(incidentIrradiance, 1e-6)
       data.set([output.width, output.height], 38)
       words[40] = modeId[mode]
       data[41] = exposure
@@ -206,15 +216,23 @@ export function createBeamRenderer(
         pass.end()
       }
 
+      let pathGroup: GPUBindGroup | undefined
+      if (mode === 'lit' && lightPathsVisible) {
+        paths ??= createRoomLightPaths(device, pathLayout)
+        pathGroup = paths.prepare(encoder, output, targets.depthView, localVP, inverseLocalVP,
+          result, offsets, incidentIrradiance, relativeIOR, training)
+      }
       const show = encoder.beginRenderPass({
         label: 'Display beam lighting', colorAttachments: [clear(output.createView())],
       })
-      show.setPipeline(composite)
+      show.setPipeline(pathGroup ? roomComposite : composite)
       show.setBindGroup(0, targets.compositeGroup)
+      if (pathGroup) show.setBindGroup(1, pathGroup)
       show.draw(3)
       show.end()
     },
     destroy() {
+      paths?.destroy()
       screen?.destroy()
       uniform.destroy()
       zeroOffsets?.destroy()

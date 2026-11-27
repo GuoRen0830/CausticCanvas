@@ -569,7 +569,10 @@ export async function createLensOptimizer(
         if (destroyed) return
         flushLossReadback()
         if (!target) {
-          if (targetVersion !== null) targetRun++
+          if (targetVersion !== null) {
+            targetRun++
+            coarse?.optimizer.setTarget(null)
+          }
           targetVersion = null
           active = false
           done = true
@@ -581,7 +584,10 @@ export async function createLensOptimizer(
         targetRun++
         active = normalized !== null
         done = !active
-        if (!normalized) return
+        if (!normalized) {
+          coarse?.optimizer.setTarget(null)
+          return
+        }
         device.queue.writeBuffer(targetBuffer, 0, normalized)
         device.queue.writeBuffer(spillGradients, 0, spillGradient(normalized, receiver, settings.spillWeight,
           power / (receiver.sizeX * receiver.sizeY)))
@@ -596,7 +602,7 @@ export async function createLensOptimizer(
             depths: forward.targetDepths,
             columns: coarse.meta.columns, rows: coarse.meta.rows,
             lensSizeX: coarse.meta.sizeX, lensSizeY: coarse.meta.sizeY,
-            baseHeight: Math.max(settings.minHeight, config.lens.thickness),
+            baseHeight: Math.max(settings.minHeight, lensMeta.flatThickness ?? config.lens.thickness),
             eta: initial.optics.lensIOR / initial.optics.outsideIOR,
             maxSlope: settings.maxSurfaceSlope,
             iterations: settings.transportIterations,
