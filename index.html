@@ -36,6 +36,16 @@
 
         <canvas id="target-canvas" aria-label="Light pattern drawing pad"></canvas>
 
+        <div class="color-tools">
+          <div id="brush-swatches" role="group" aria-label="Light colors"></div>
+          <label class="custom-color" title="Choose a custom light color">
+            <input id="brush-color" type="color" value="#ffffff" aria-label="Custom light color" />
+            <span aria-hidden="true">+</span>
+          </label>
+          <button id="recolor" type="button" aria-pressed="false" disabled
+            title="Change the color of existing strokes while preserving their shape">Recolor</button>
+        </div>
+
         <div class="tools">
           <label class="brush" title="Brush size">
             <span>Brush</span>

@@ -2,10 +2,10 @@ import type { Mat4 } from 'wgpu-matrix'
 import { config, incidentColumnHeight } from '../config'
 import marchShader from './shaders/volume-march.wgsl?raw'
 
-// The half-resolution target carries linear fog radiance in R and the sampled
-// opaque-surface distance from the near plane in G, for depth-aware upsampling.
+// RGB stores linear scattered radiance. A stores the opaque-surface distance
+// from the near plane for depth-aware upsampling.
 export function createVolumeMarch(device: GPUDevice) {
-  const format: GPUTextureFormat = 'rg16float'
+  const format: GPUTextureFormat = 'rgba16float'
   const module = device.createShaderModule({ label: 'Room single scattering', code: marchShader })
   const pipeline = device.createRenderPipeline({
     label: 'Integrate visible light volume',
@@ -64,7 +64,7 @@ export function createVolumeMarch(device: GPUDevice) {
       device.queue.writeBuffer(uniform, 0, data)
       const pass = encoder.beginRenderPass({
         label: 'March light volume at half resolution',
-        colorAttachments: [{ view: outputView, loadOp: 'clear', clearValue: [0, 60000, 0, 0], storeOp: 'store' }],
+        colorAttachments: [{ view: outputView, loadOp: 'clear', clearValue: [0, 0, 0, 60000], storeOp: 'store' }],
       })
       pass.setPipeline(pipeline)
       pass.setBindGroup(0, bound.group)

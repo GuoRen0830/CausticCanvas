@@ -44,6 +44,14 @@ export async function checkObjMesh(report: (line: string) => void) {
   expect(geometry.mesh.indices.slice(6).join() === '4,5,6,4,6,7',
     'custom scene must rebase indices past the floor')
   const view = buildDesignView(geometry.mesh, receiver)
+  const terrain = buildSceneGeometry(receiver, { mesh: model, receiverFloor: false })
+  const terrainView = buildDesignView(terrain.mesh, receiver)
+  const emptyPixel = 2 * receiver.width + 2
+  const insidePixel = 16 * receiver.width + 10
+  const terrainFace = terrainView.samples[2 * insidePixel] - 1
+  expect(terrain.mesh === model && terrainView.bvh.triangles[12 * terrainFace + 3] === 2 &&
+    terrainView.samples[2 * emptyPixel] === 0 && terrainView.surfaceAreas[emptyPixel] === 0,
+    'authored terrain supplies both the visible mesh and lamp hits, and only its footprint can be painted')
   const sample = (x: number, y: number) => {
     const i = y * receiver.width + x
     const triangle = view.samples[2 * i] - 1

@@ -4,6 +4,7 @@ import { config } from '../config'
 import type { ForwardResult } from '../contracts'
 import { sceneAlbedoFormat, type SceneGeometry } from './scene-mesh'
 import { createRoomLightPaths } from './room-light-paths'
+import apertureUV from './shaders/aperture-uv.wgsl?raw'
 import commonShader from './shaders/beam-common.wgsl?raw'
 import coverageShader from './shaders/pixel-coverage.wgsl?raw'
 import hitTypes from './shaders/scene-hit.wgsl?raw'
@@ -26,6 +27,8 @@ export function createBeamRenderer(
   let exposure = initialExposure
   let environmentLight = 0, incidentIrradiance = 1
   let lightPathsVisible = true
+  let colorFilter: GPUTextureView | undefined
+  let filterRevision = 0
   const data = new Float32Array(44)
   const words = new Uint32Array(data.buffer)
   const localVP = data.subarray(0, 16)
@@ -34,12 +37,20 @@ export function createBeamRenderer(
     label: 'Beam frame', size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   const module = device.createShaderModule({
-    label: 'Scene beam rendering', code: [commonShader, coverageShader, beamShader, roomCompositeShader, hitTypes, splatShader].join('\n'),
+    label: 'Scene beam rendering', code: [apertureUV, commonShader, coverageShader, beamShader, roomCompositeShader, hitTypes, splatShader].join('\n'),
   })
+  // WebGPU still requires the binding when the white-light path skips the lookup.
+  const emptyFilter = device.createTexture({
+    label: 'Unused aperture filter', size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING,
+  })
+  const emptyFilterView = emptyFilter.createView()
   const fieldLayout = device.createBindGroupLayout({
-    entries: [0, 1, 2].map(binding => ({
-      binding, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' },
-    })),
+    entries: [
+      ...[0, 1, 2].map((binding): GPUBindGroupLayoutEntry => ({
+        binding, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' },
+      })),
+      { binding: 5, visibility: GPUShaderStage.VERTEX, texture: { sampleType: 'unfilterable-float' } },
+    ],
   })
   function frameLayout(entries: GPUBindGroupLayoutEntry[]) {
     return device.createBindGroupLayout({ entries: [
@@ -59,7 +70,7 @@ export function createBeamRenderer(
   let previousHits: ForwardResult['firstHits']
   const add: GPUBlendComponent = { srcFactor: 'one', dstFactor: 'one', operation: 'add' }
   // Dense subpixel footprints can contribute hundreds of small terms per pixel.
-  const screenFormat = device.features.has('float32-blendable') ? 'rg32float' : 'rg16float'
+  const screenFormat = device.features.has('float32-blendable') ? 'rgba32float' : 'rgba16float'
   const splat = device.createRenderPipeline({
     label: 'Local first-hit footprints',
     layout: device.createPipelineLayout({ bindGroupLayouts: [splatFrame, fieldLayout, hitLayout] }),
@@ -156,6 +167,11 @@ export function createBeamRenderer(
     setLightPathsVisible(value: boolean) {
       lightPathsVisible = value
     },
+    setColorFilter(view: GPUTextureView | undefined, revision = 0) {
+      if (colorFilter !== view) boundField = undefined
+      colorFilter = view
+      filterRevision = revision
+    },
 
     render(
       encoder: GPUCommandEncoder, output: GPUTexture, viewProjection: Mat4,
@@ -174,6 +190,7 @@ export function createBeamRenderer(
           group: device.createBindGroup({ layout: fieldLayout, entries: [
             { binding: 0, resource: { buffer: lens.heightBuffer } }, { binding: 1, resource: { buffer: field.buffer } },
             { binding: 2, resource: { buffer: offsets } },
+            { binding: 5, resource: colorFilter ?? emptyFilterView },
           ] }),
         }
       }
@@ -187,6 +204,7 @@ export function createBeamRenderer(
       data.set([output.width, output.height], 38)
       words[40] = modeId[mode]
       data[41] = exposure
+      words[42] = Number(!!colorFilter)
       device.queue.writeBuffer(uniform, 0, data)
 
       const targets = screenFor(output)
@@ -220,7 +238,7 @@ export function createBeamRenderer(
       if (mode === 'lit' && lightPathsVisible) {
         paths ??= createRoomLightPaths(device, pathLayout)
         pathGroup = paths.prepare(encoder, output, targets.depthView, localVP, inverseLocalVP,
-          result, offsets, incidentIrradiance, relativeIOR, training)
+          result, offsets, incidentIrradiance, relativeIOR, training, colorFilter, filterRevision)
       }
       const show = encoder.beginRenderPass({
         label: 'Display beam lighting', colorAttachments: [clear(output.createView())],
@@ -235,6 +253,7 @@ export function createBeamRenderer(
       paths?.destroy()
       screen?.destroy()
       uniform.destroy()
+      emptyFilter.destroy()
       zeroOffsets?.destroy()
     },
   }

@@ -195,7 +195,7 @@ h3 {
 }
 
 #target-canvas {
-  background: #f7f7f6;
+  background: #999;
   touch-action: none;
   cursor: crosshair;
   box-shadow: inset 0 0 0 1px var(--line-strong);
@@ -203,6 +203,96 @@ h3 {
 
 #caustic-canvas {
   background: #000;
+}
+
+.color-tools,
+#brush-swatches {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.color-tools {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+#brush-swatches button,
+.custom-color {
+  position: relative;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  padding: 3px;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+#brush-swatches button::before,
+.custom-color span {
+  content: '';
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--swatch);
+}
+
+#brush-swatches button:hover,
+.custom-color:hover {
+  background: var(--hover);
+}
+
+#brush-swatches button[aria-pressed='true'],
+.custom-color.selected {
+  border-color: var(--ink);
+}
+
+.custom-color {
+  width: 26px;
+  height: 26px;
+  padding: 2px;
+}
+
+.custom-color span {
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  font: 600 13px/1 var(--font);
+  background: conic-gradient(#ffc6ca, #ffe09a, #acf0c2, #abe6ff, #cdc2ff, #ffc6ca);
+}
+
+.custom-color.selected span {
+  background: var(--swatch);
+  color: transparent;
+}
+
+.custom-color input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.custom-color:has(:focus-visible) {
+  outline: 2px solid #0a64d8;
+  outline-offset: 2px;
+}
+
+#recolor {
+  margin-left: auto;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+#recolor[aria-pressed='true'] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--panel);
 }
 
 .tools {
@@ -478,4 +568,10 @@ h3 {
   #camera-help {
     display: none;
   }
+}
+
+@media (max-width: 360px) {
+  #brush-swatches { gap: 0; }
+  .color-tools { gap: 2px; }
+  #recolor { padding-inline: 4px; }
 }

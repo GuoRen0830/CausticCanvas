@@ -1,0 +1,4 @@
+Using the project-authored shoreline color atlas for coastal rocks because the original texture is unavailable.
+Using the project-modeled crate in place of wooden_crate_01.
+Using the project-modeled barrel in place of wooden_barrels_01.
+Using the project-modeled lantern in place of wooden_lantern_01.

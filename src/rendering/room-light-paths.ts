@@ -10,6 +10,8 @@ export function createRoomLightPaths(device: GPUDevice, layout: GPUBindGroupLayo
   const march = createVolumeMarch(device)
   const glass = createRoomGlass(device)
   let sampledResult: ForwardResult | undefined
+  let sampledFilter: GPUTextureView | undefined
+  let sampledColorRevision = 0
   let sampledDuringTraining = false
   let lastUpdate = -Infinity
   let overlay: GPUTexture | undefined
@@ -20,16 +22,20 @@ export function createRoomLightPaths(device: GPUDevice, layout: GPUBindGroupLayo
   return {
     prepare(encoder: GPUCommandEncoder, output: GPUTexture, depth: GPUTextureView,
       vp: Mat4, inverseVP: Mat4, result: ForwardResult, offsets: GPUBuffer,
-      incidentIrradiance: number, relativeIOR: number, training: boolean) {
+      incidentIrradiance: number, relativeIOR: number, training: boolean,
+      colorFilter?: GPUTextureView, colorRevision = 0) {
       const { lens } = result.beams
       const z = result.receiver.z
       const now = performance.now()
       // New evaluations may reuse the same GPU buffers. Limit field rebuilds
       // during optimization, then resolve the settled lens at full density.
-      const needsField = sampledResult !== result || (sampledDuringTraining && !training)
+      const needsField = sampledResult !== result || sampledFilter !== colorFilter ||
+        sampledColorRevision !== colorRevision || (sampledDuringTraining && !training)
       if (needsField && (!training || now - lastUpdate >= 100)) {
-        volume.update(encoder, result, offsets, z, training)
+        volume.update(encoder, result, offsets, z, training, colorFilter)
         sampledResult = result
+        sampledFilter = colorFilter
+        sampledColorRevision = colorRevision
         sampledDuringTraining = training
         lastUpdate = now
       }

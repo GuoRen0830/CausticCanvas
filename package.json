@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prepare:scenes": "node scripts/prepare-preview-scenes.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },

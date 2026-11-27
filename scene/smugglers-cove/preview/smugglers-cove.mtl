@@ -1,0 +1,419 @@
+newmtl material-0
+Kd 1 0.98 0.94
+map_Kd textures/base-color-0.jpg
+
+newmtl material-1
+Kd 0.89 0.9 0.87
+map_Kd textures/base-color-0.jpg
+
+newmtl material-2
+Kd 0.76 0.8 0.78
+map_Kd textures/base-color-0.jpg
+
+newmtl material-3
+Kd 0.65 0.71 0.69
+map_Kd textures/base-color-0.jpg
+
+newmtl material-4
+Kd 1 1 1
+map_Kd -clamp on textures/base-color-1.png
+
+newmtl material-5
+Kd 0.17 0.16 0.12
+map_Kd textures/base-color-0.jpg
+
+newmtl material-6
+Kd 0.18 0.23 0.1
+
+newmtl material-7
+Kd 0.29 0.33 0.18
+
+newmtl material-8
+Kd 0.42 0.36 0.18
+
+newmtl material-9
+Kd 1 1 1
+map_Kd textures/base-color-2.jpg
+
+newmtl material-10
+Kd 0.28 0.27 0.23
+map_Kd textures/base-color-3.png
+
+newmtl material-11
+Kd 0.53 0.53 0.46
+map_Kd textures/base-color-3.png
+
+newmtl material-12
+Kd 0.62 0.53 0.43
+map_Kd textures/base-color-3.png
+
+newmtl material-13
+Kd 0.59 0.52 0.39
+map_Kd textures/base-color-3.png
+
+newmtl material-14
+Kd 0.67 0.64 0.57
+map_Kd textures/base-color-3.png
+
+newmtl material-15
+Kd 0.1 0.11 0.105
+
+newmtl material-16
+Kd 0.245 0.325 0.31
+
+newmtl material-17
+Kd 0.39 0.26 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-18
+Kd 0.63 0.45 0.26
+map_Kd textures/base-color-4.png
+
+newmtl material-19
+Kd 0.53 0.4 0.24
+
+newmtl material-20
+Kd 0.62 0.31 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-21
+Kd 0.105 0.255 0.275
+map_Kd textures/base-color-4.png
+
+newmtl material-22
+Kd 0.19 0.285 0.284
+
+newmtl material-23
+Kd 0.275 0.345 0.34
+
+newmtl material-24
+Kd 0.39 0.26 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-25
+Kd 0.63 0.45 0.26
+map_Kd textures/base-color-4.png
+
+newmtl material-26
+Kd 0.53 0.4 0.24
+
+newmtl material-27
+Kd 0.62 0.31 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-28
+Kd 0.59 0.091 0.04
+
+newmtl material-29
+Kd 0.82 0.7 0.48
+
+newmtl material-30
+Kd 0.53 0.4 0.24
+
+newmtl material-31
+Kd 0.43 0.237 0.099
+
+newmtl material-32
+Kd 0.63 0.45 0.26
+map_Kd textures/base-color-4.png
+
+newmtl material-33
+Kd 0.39 0.26 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-34
+Kd 0.17 0.35 0.56
+map_Kd textures/base-color-5.png
+
+newmtl material-35
+Kd 0.86 0.43 0.105
+
+newmtl material-36
+Kd 0.94 0.82 0.6
+map_Kd textures/base-color-5.png
+
+newmtl material-37
+Kd 0.105 0.255 0.275
+map_Kd textures/base-color-4.png
+
+newmtl material-38
+Kd 0.53 0.4 0.24
+
+newmtl material-39
+Kd 0.62 0.31 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-40
+Kd 0.22 0.38 0.42
+
+newmtl material-41
+Kd 0.78 0.83 0.76
+
+newmtl material-42
+Kd 0.15 0.41 0.43
+
+newmtl material-43
+Kd 0.1 0.11 0.105
+
+newmtl material-44
+Kd 0.19 0.285 0.284
+
+newmtl material-45
+Kd 0.67 0.57 0.42
+map_Kd textures/base-color-4.png
+
+newmtl material-46
+Kd 0.28 0.27 0.23
+map_Kd textures/base-color-3.png
+
+newmtl material-47
+Kd 0.31 0.35 0.29
+map_Kd textures/base-color-3.png
+
+newmtl material-48
+Kd 0.59 0.52 0.39
+map_Kd textures/base-color-3.png
+
+newmtl material-49
+Kd 0.53 0.53 0.46
+map_Kd textures/base-color-3.png
+
+newmtl material-50
+Kd 0.62 0.53 0.43
+map_Kd textures/base-color-3.png
+
+newmtl material-51
+Kd 0.67 0.64 0.57
+map_Kd textures/base-color-3.png
+
+newmtl material-52
+Kd 0.44 0.45 0.41
+map_Kd textures/base-color-3.png
+
+newmtl material-53
+Kd 0.1 0.11 0.105
+
+newmtl material-54
+Kd 0.39 0.26 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-55
+Kd 0.19 0.285 0.284
+
+newmtl material-56
+Kd 0.92 0.85 0.68
+
+newmtl material-57
+Kd 0.59 0.105 0.063
+
+newmtl material-58
+Kd 1 0.78 0.38
+
+newmtl material-59
+Kd 0.66 0.46 0.21
+
+newmtl material-60
+Kd 0.17 0.39 0.34
+
+newmtl material-61
+Kd 0.39 0.26 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-62
+Kd 0.055 0.22 0.235
+map_Kd textures/base-color-4.png
+
+newmtl material-63
+Kd 0.08 0.3 0.29
+map_Kd textures/base-color-4.png
+
+newmtl material-64
+Kd 0.62 0.31 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-65
+Kd 0.9 0.77 0.52
+
+newmtl material-66
+Kd 0.63 0.45 0.26
+map_Kd textures/base-color-4.png
+
+newmtl material-67
+Kd 0.71 0.51 0.3
+map_Kd textures/base-color-4.png
+
+newmtl material-68
+Kd 0.1 0.11 0.105
+
+newmtl material-69
+Kd 0.53 0.4 0.24
+
+newmtl material-70
+Kd 0.66 0.215 0.121
+map_Kd textures/base-color-6.png
+
+newmtl material-71
+Kd 0.69 0.55 0.32
+
+newmtl material-72
+Kd 0.73 0.337 0.182
+map_Kd textures/base-color-6.png
+
+newmtl material-73
+Kd 0.91 0.392 0.18
+map_Kd textures/base-color-6.png
+
+newmtl material-74
+Kd 0.83 0.32 0.151
+map_Kd textures/base-color-6.png
+
+newmtl material-75
+Kd 0.46 0.215 0.099
+
+newmtl material-76
+Kd 0.92 0.82 0.62
+map_Kd textures/base-color-6.png
+
+newmtl material-77
+Kd 0.86 0.745 0.54
+map_Kd textures/base-color-6.png
+
+newmtl material-78
+Kd 0.17 0.13 0.084
+
+newmtl material-79
+Kd 0.142 0.175 0.102
+map_Kd textures/base-color-3.png
+
+newmtl material-80
+Kd 0.148 0.164 0.138
+map_Kd textures/base-color-3.png
+
+newmtl material-81
+Kd 0.295 0.275 0.217
+map_Kd textures/base-color-3.png
+
+newmtl material-82
+Kd 0.78 0.9 0.75
+map_Kd -clamp on textures/base-color-1.png
+
+newmtl material-83
+Kd 0.45 0.42 0.32
+
+newmtl material-84
+Kd 0.255 0.225 0.166
+
+newmtl material-85
+Kd 0.62 0.56 0.42
+
+newmtl material-86
+Kd 0.53 0.53 0.46
+map_Kd textures/base-color-3.png
+
+newmtl material-87
+Kd 0.39 0.26 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-88
+Kd 0.62 0.31 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-89
+Kd 0.63 0.45 0.26
+map_Kd textures/base-color-4.png
+
+newmtl material-90
+Kd 0.245 0.325 0.31
+
+newmtl material-91
+Kd 0.105 0.255 0.275
+map_Kd textures/base-color-4.png
+
+newmtl material-92
+Kd 0.1 0.11 0.105
+
+newmtl material-93
+Kd 0.53 0.4 0.24
+
+newmtl material-94
+Kd 0.19 0.285 0.284
+
+newmtl material-95
+Kd 0.275 0.345 0.34
+
+newmtl material-96
+Kd 1 1 1
+map_Kd textures/base-color-7.jpg
+
+newmtl material-97
+Kd 1 1 1
+map_Kd textures/base-color-8.jpg
+
+newmtl material-98
+Kd 0.1 0.11 0.105
+
+newmtl material-99
+Kd 0.53 0.4 0.24
+
+newmtl material-100
+Kd 0.059 0.207 0.188
+
+newmtl material-101
+Kd 0.82 0.55 0.33
+map_Kd textures/base-color-7.jpg
+
+newmtl material-102
+Kd 0.036 0.154 0.155
+
+newmtl material-103
+Kd 0.94 0.68 0.43
+map_Kd textures/base-color-7.jpg
+
+newmtl material-104
+Kd 0.028 0.079 0.071
+
+newmtl material-105
+Kd 0.39 0.21 0.091
+
+newmtl material-106
+Kd 0.75 0.65 0.42
+
+newmtl material-107
+Kd 0.55 0.35 0.16
+
+newmtl material-108
+Kd 1 1 1
+map_Kd textures/base-color-9.jpg
+
+newmtl material-109
+Kd 0.39 0.26 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-110
+Kd 0.63 0.45 0.26
+map_Kd textures/base-color-4.png
+
+newmtl material-111
+Kd 0.62 0.31 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-112
+Kd 0.39 0.26 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-113
+Kd 0.63 0.45 0.26
+map_Kd textures/base-color-4.png
+
+newmtl material-114
+Kd 0.62 0.31 0.13
+map_Kd textures/base-color-4.png
+
+newmtl material-115
+Kd 0.1 0.11 0.105
+
+newmtl material-116
+Kd 0.1 0.11 0.105
+
+newmtl material-117
+Kd 0.76 0.6 0.3

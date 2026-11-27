@@ -88,13 +88,23 @@ export async function checkUniformReset(device: GPUDevice, report: (line: string
     const painted = await render(1)
     if (session.state.lens.heightBuffer === original ||
         !painted.some((v, i) => Math.abs(v - initial[i]) > 12)) throw new Error('The painted preview did not change.')
+    const trained = session.state.lens.heightBuffer
+    const colors = new Float32Array(3 * values.length)
+    for (let i = 0; i < values.length; i++) colors[3 * i + 2] = 1
+    session.setTarget({ ...target, colors, colorVersion: 1 })
+    const recolored = await render(0)
+    if (session.state.lens.heightBuffer !== trained ||
+        !recolored.some((v, i) => i % 4 === 2 && v > 64 && recolored[i - 2] < 4) ||
+        recolored.some((v, i) => i % 4 < 2 && v > 4)) {
+      throw new Error('A color-only edit must recolor the current caustic without another optimizer step.')
+    }
     session.setTarget({ ...target, version: 2, values: new Float32Array(values.length) })
     const cleared = await render(0)
     if (session.state.lens.heightBuffer !== original || session.state.lens.offsetBuffer ||
         cleared.some((v, i) => Math.abs(v - initial[i]) > 2)) {
       throw new Error('Clearing the last stroke must restore the initial lens and flood image on the next draw.')
     }
-    report('PASS scene startup and painting followed by zero-step undo/clear to uniform illumination')
+    report('PASS scene startup, zero-step recoloring, and undo/clear to the initial white illumination')
   } finally {
     staging.destroy()
     output.destroy()

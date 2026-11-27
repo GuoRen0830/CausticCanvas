@@ -20,8 +20,8 @@ fn insideTarget(pixel: vec2i) -> bool {
 
 // Footprints smaller than a screen pixel leave sparkle on surfaces. Average a
 // 5 x 5 neighbourhood, but only across texels that face the same way.
-fn smoothedIrradiance(pixel: vec2i, n: vec3f) -> f32 {
-  var sum = 0.0;
+fn smoothedIrradiance(pixel: vec2i, n: vec3f) -> vec3f {
+  var sum = vec3f(0);
   var weights = 0.0;
   for (var y = -2; y <= 2; y++) {
     for (var x = -2; x <= 2; x++) {
@@ -29,11 +29,11 @@ fn smoothedIrradiance(pixel: vec2i, n: vec3f) -> f32 {
       if (!insideTarget(q) || textureLoad(albedo, q, 0).a < 0.5) { continue; }
       let facing = max(dot(decodeNormal(q), n), 0.0);
       let w = exp(-0.25 * f32(x * x + y * y)) * facing * facing * facing * facing;
-      sum += w * textureLoad(lighting, q, 0).r;
+      sum += w * textureLoad(lighting, q, 0).rgb;
       weights += w;
     }
   }
-  return select(textureLoad(lighting, pixel, 0).r, sum / weights, weights > 0.0);
+  return select(textureLoad(lighting, pixel, 0).rgb, sum / max(weights, 1e-6), weights > 0.0);
 }
 
 // Filmic curve (Narkowicz ACES fit): bright light rolls off instead of clipping.
@@ -63,15 +63,15 @@ fn surfaceRadiance(pixel: vec2i, surface: vec4f) -> vec3f {
 @fragment
 fn compositeFS(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let pixel = vec2i(frag.xy);
-  let light = textureLoad(lighting, pixel, 0).rg;
+  let light = textureLoad(lighting, pixel, 0);
   if (frame.mode == 1u) {
-    if (light.g == 0.0) { return vec4f(0, 0, 0, 1); }
+    if (light.a == 0.0) { return vec4f(0, 0, 0, 1); }
     let blue = vec3f(0.13, 0.6, 0.93);
     let cyan = vec3f(0.1, 0.95, 0.95);
     let green = vec3f(0.25, 0.85, 0.35);
     let yellow = vec3f(1.0, 0.82, 0.1);
     let red = vec3f(1.0, 0.2, 0.15);
-    let level = log2(light.g);
+    let level = log2(light.a);
     var color = mix(blue, cyan, clamp(level, 0.0, 1.0));
     color = mix(color, green, clamp(level - 1.0, 0.0, 1.0));
     color = mix(color, yellow, clamp(0.5 * (level - 2.0), 0.0, 1.0));

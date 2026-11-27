@@ -1,9 +1,10 @@
 import type { Mat4 } from 'wgpu-matrix'
 import { config, sceneLamp } from './config'
-import type { AppState, ForwardModel, LensOptimizer, ReceiverPlane, TargetImage } from './contracts'
+import type { AppState, ForwardModel, ForwardResult, LensOptimizer, ReceiverPlane, TargetImage } from './contracts'
 import { createFlatLens, createLens } from './geometry/lens-mesh'
 import type { DesignView } from './optics/design-view'
 import { createForwardModel } from './optics/forward-model'
+import { createApertureColor } from './optics/aperture-color'
 import { createLensOptimizer } from './optimization/lens-optimizer'
 import { uniformIlluminationHeights } from './optimization/uniform-illumination'
 import { createBeamRenderer, type BeamView } from './rendering/beam-renderer'
@@ -31,10 +32,12 @@ export async function createSceneSession(
   let scene: Awaited<ReturnType<typeof createSceneRenderer>> | undefined
   let beams: ReturnType<typeof createBeamRenderer> | undefined
   let display: ReturnType<typeof createCausticDisplay> | undefined
+  let apertureColor: ReturnType<typeof createApertureColor> | undefined
 
   function destroy() {
     display?.destroy()
     beams?.destroy()
+    apertureColor?.destroy()
     scene?.destroy()
     optimizer?.destroy()
     forward?.destroy()
@@ -63,9 +66,33 @@ export async function createSceneSession(
     const simulation = createSimulation(state, forward, optimizer ?? undefined)
     const initial = device.createCommandEncoder({ label: 'Initial scene evaluation' })
     let result = simulation.encode(initial).result
-    await display.prepare(result.caustic.kind)
+    await Promise.all([display.prepare(result.caustic.kind), display.prepare('rgb')])
     display.setImage(result.caustic)
     device.queue.submit([initial.finish()])
+
+    let calibration: { result: ForwardResult; target: TargetImage; shapeVersion: number; colorVersion?: number } | undefined
+    let filterRevision = 0, lastCalibration = -Infinity
+    // The forward buffers may be reused. Recompute from the current evaluation,
+    // and keep both color textures on the GPU between updates and during camera motion.
+    function updateColor(encoder: GPUCommandEncoder, target: TargetImage | null, training: boolean, evaluated: boolean) {
+      if (!target?.colors) {
+        if (calibration) beams!.setColorFilter(undefined)
+        if (calibration || evaluated) display!.setImage(result.caustic)
+        calibration = undefined
+        return
+      }
+      const now = performance.now()
+      if (calibration?.target === target && calibration.shapeVersion === target.version &&
+          calibration.colorVersion === target.colorVersion) {
+        if (calibration.result === result || (training && now - lastCalibration < 100)) return
+      }
+      apertureColor ??= createApertureColor(device)
+      const { filter, image } = apertureColor.update(encoder, result, target, designView)
+      beams!.setColorFilter(filter, ++filterRevision)
+      display!.setImage({ kind: 'rgb', view: image, width: receiver.width, height: receiver.height })
+      calibration = { result, target, shapeVersion: target.version, colorVersion: target.colorVersion }
+      lastCalibration = now
+    }
 
     // The panel starts exposed for the floodlit scene. Once there is a drawing,
     // expose for the irradiance a fully painted pixel would get if all light
@@ -91,6 +118,9 @@ export async function createSceneSession(
     return {
       state, canOptimize: !!optimizer, destroy,
       setTarget(target: TargetImage | null) {
+        if (target?.colors && target.colors.length !== 3 * target.values.length) {
+          throw new Error('Brush colors must have one RGB triplet per target pixel.')
+        }
         state.target = target?.values.some((value, i) => value > 0 && designView.surfaceAreas[i] > 0) ? target : null
         return state.target !== null
       },
@@ -102,16 +132,17 @@ export async function createSceneSession(
         let done = false
         const restoreInitialLens = !state.target && state.lens.heightBuffer !== initialLens.heightBuffer
         if (restoreInitialLens) state.lens = initialLens
-        if (restoreInitialLens || (state.target && steps > 0)) {
+        const evaluated = restoreInitialLens || (!!state.target && steps > 0)
+        if (evaluated) {
           const batch = simulation.encode(encoder, state.target ? steps : 0)
           result = batch.result
           done = batch.done
-          display!.setImage(result.caustic)
         }
+        const training = !!state.target && steps > 0 && !done
+        updateColor(encoder, state.target, training, evaluated)
         beams!.setReferenceIrradiance(state.optics.incidentIrradiance)
         scene!.update(vp)
-        beams!.render(encoder, output, vp, mode, result, scene!.draw,
-          !!state.target && steps > 0 && !done)
+        beams!.render(encoder, output, vp, mode, result, scene!.draw, training)
         const pass = encoder.beginRenderPass({ label: 'Caustic preview', colorAttachments: [{
           view: preview.createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store',
         }] })

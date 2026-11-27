@@ -34,13 +34,18 @@ async function main() {
   const topbar = element('topbar', 'header')
   const panel = element('design-panel', 'aside'), undoButton = element('undo-target', 'button')
   const brushSize = element('brush-size', 'input')
+  const brushColor = element('brush-color', 'input'), swatches = element('brush-swatches', 'div')
+  const recolor = element('recolor', 'button')
   const debugControl = element('debug-control', 'div')
   const roomOptions = element('room-options', 'label')
   const lightPaths = element('light-paths', 'input')
   const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#view-switch button[data-view]'))
   let currentView: BeamView = 'lit'
   for (const [id, preset] of Object.entries(bundledScenes)) sceneSelect.add(new Option(preset.name, id))
-  sceneSelect.value = defaultScene
+  const requestedScene = new URLSearchParams(location.search).get('scene')
+  const initialScene = requestedScene && Object.hasOwn(bundledScenes, requestedScene)
+    ? requestedScene as BundledScene : defaultScene
+  sceneSelect.value = initialScene
   const events = { signal: lifetime.signal }
 
   importButton.disabled = folderButton.disabled = true
@@ -136,6 +141,41 @@ async function main() {
   clearButton.addEventListener('click', () => pad?.clear(), events)
   undoButton.addEventListener('click', () => pad?.undo(), events)
   brushSize.addEventListener('input', () => pad?.setBrush(Number(brushSize.value)), events)
+  const palette = [
+    ['White', '#ffffff'], ['Red', '#ff3846'], ['Amber', '#ffaf24'],
+    ['Green', '#32dc85'], ['Blue', '#406dff'], ['Violet', '#b35aff'],
+  ]
+  function selectColor(color: string) {
+    brushColor.value = color
+    let custom = true
+    for (const button of swatches.querySelectorAll('button')) {
+      const selected = button.value === color
+      button.setAttribute('aria-pressed', String(selected))
+      if (selected) custom = false
+    }
+    brushColor.parentElement!.classList.toggle('selected', custom)
+    brushColor.parentElement!.style.setProperty('--swatch', color)
+    pad?.setColor(color)
+  }
+  const swatchButtons = document.createDocumentFragment()
+  for (const [name, color] of palette) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.value = color
+    button.title = name + ' light'
+    button.setAttribute('aria-label', button.title)
+    button.style.setProperty('--swatch', color)
+    button.addEventListener('click', () => selectColor(color), events)
+    swatchButtons.append(button)
+  }
+  swatches.replaceChildren(swatchButtons)
+  selectColor(brushColor.value)
+  brushColor.addEventListener('input', () => selectColor(brushColor.value), events)
+  recolor.addEventListener('click', () => {
+    const selected = recolor.getAttribute('aria-pressed') !== 'true'
+    recolor.setAttribute('aria-pressed', String(selected))
+    pad?.setRecolor(selected)
+  }, events)
   window.addEventListener('resize', () => frameLoop?.requestFrame(), events)
 
   function drawSceneFrame(scene: SceneSession, steps: number, mode: BeamView) {
@@ -180,7 +220,9 @@ async function main() {
     switching = true
     lightPaths.disabled = true
     importButton.disabled = folderButton.disabled = sceneSelect.disabled = true
+    const preset = typeof source === 'string' ? bundledScenes[source] : undefined
     const name = typeof source === 'string' ? bundledScenes[source].name : source.name
+    const roomCamera = preset && 'roomCamera' in preset ? preset.roomCamera : undefined
     sceneStatus.textContent = `Loading ${name}…`
     let candidate: SceneSession | undefined
     let warnings = new Set<string>()
@@ -193,7 +235,9 @@ async function main() {
       const fitted = bounds.receiver
       // Place the fitted receiver on the world floor, with the lamp directly above it.
       const opticalToWorld = mat4.multiply(mat4.translation([0, fitted.z, 0]), mat4.rotationX(Math.PI / 2))
-      const geometry = buildSceneGeometry(fitted, { mesh: asset.mesh })
+      const geometry = buildSceneGeometry(fitted, {
+        mesh: asset.mesh, receiverFloor: source !== 'smugglers-cove',
+      })
       geometry.materials = asset.materials
       const framing: OrbitCameraOptions = {
         target: [0, bounds.height / 2, 0], size: [fitted.sizeX, bounds.height, fitted.sizeY],
@@ -215,7 +259,8 @@ async function main() {
       device.pushErrorScope('out-of-memory')
       device.pushErrorScope('validation')
       try {
-        candidate = await createSceneSession(device, format, opticalToWorld, geometry, fitted, designView, message => warnings.add(message))
+        candidate = await createSceneSession(device, format, opticalToWorld, geometry, fitted, designView,
+          message => warnings.add(message))
         if (events.signal.aborted) return
         candidate.setLightPathsVisible(lightPaths.checked)
         // Include G-buffer allocation and first-hit splatting in the same validation scope.
@@ -229,14 +274,24 @@ async function main() {
       if (events.signal.aborted) return
 
       const next = candidate
+      let lastShapeVersion: number | undefined
       const newPad = createDrawingPad(targetCanvas, fitted, target => {
         hasTarget = next.setTarget(target)
-        optimizationDone = false
-        if (runTimer !== undefined) runStarted = performance.now()
-        updateRunState()
+        recolor.disabled = !hasTarget
+        if (!hasTarget) {
+          recolor.setAttribute('aria-pressed', 'false')
+          pad?.setRecolor(false)
+        }
+        if (lastShapeVersion !== target.version) {
+          lastShapeVersion = target.version
+          optimizationDone = false
+          if (runTimer !== undefined) runStarted = performance.now()
+          updateRunState()
+        }
         frameLoop?.requestFrame()
       }, designView, canUndo => { undoButton.disabled = !canUndo })
       newPad.setBrush(Number(brushSize.value))
+      newPad.setColor(brushColor.value)
       pad?.destroy()
       active?.destroy()
       pad = newPad
@@ -245,7 +300,9 @@ async function main() {
       sceneFraming = framing
       const aperture = next.state.lens
       const roomHeight = fitted.z + incidentColumnHeight(fitted.z, Math.max(aperture.sizeX, aperture.sizeY))
-      roomFraming = {
+      // Frame the shore itself so the overhead lamp does not push the
+      // starting view away from the surfaces the artist wants to paint.
+      roomFraming = roomCamera ? { ...sceneFraming, ...roomCamera } : {
         ...sceneFraming, azimuth: 0.65,
         lampTop: { y: roomHeight, width: aperture.sizeX, depth: aperture.sizeY },
       }
@@ -259,9 +316,9 @@ async function main() {
       sceneSelect.value = activePreset ?? ''
       credit.hidden = !activePreset
       if (activePreset) {
-        const { author, credit: link } = bundledScenes[activePreset]
+        const { attribution, credit: link } = bundledScenes[activePreset]
         credit.href = link
-        credit.textContent = `Model by ${author} · CC BY 4.0`
+        credit.textContent = attribution
       }
       // The model credit lives in the scene picker's tooltip.
       sceneSelect.title = activePreset ? credit.textContent : ''
@@ -305,7 +362,7 @@ async function main() {
     }, events)
   }
   sceneSelect.addEventListener('change', () => { void loadScene(sceneSelect.value as BundledScene) }, events)
-  await loadScene(defaultScene)
+  await loadScene(initialScene)
 }
 
 main().catch((error: unknown) => {

@@ -8,7 +8,8 @@ struct Frame {
   targetSize: vec2f,
   mode: u32,
   exposure: f32,
-  padding2: vec2f,
+  hasColorFilter: u32,
+  pad: u32,
 }
 
 // Fixed logarithmic scale relative to the incident lamp irradiance.
@@ -36,6 +37,7 @@ fn irradianceHeat(value: f32) -> vec4f {
 @group(1) @binding(1) var<storage, read> beams: array<vec4f>;
 // Per-vertex XY displacement from the uniform grid, in meters.
 @group(1) @binding(2) var<storage, read> offsets: array<vec2f>;
+@group(1) @binding(5) var apertureFilter: texture_2d<f32>;
 
 fn sourceVertex(id: u32) -> vec3f {
   let gridXY = vec2f(f32(id % frame.grid.x), f32(id / frame.grid.x));

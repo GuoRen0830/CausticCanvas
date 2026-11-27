@@ -2,10 +2,12 @@ import type { CausticImage } from '../contracts'
 import shaderSource from './shaders/caustic-display.wgsl?raw'
 import displayColor from './shaders/irradiance-display.wgsl?raw'
 
+type DisplayImage = CausticImage | { kind: 'rgb'; width: number; height: number; view: GPUTextureView }
+
 async function createCausticPipeline(
   device: GPUDevice,
   format: GPUTextureFormat,
-  kind: CausticImage['kind'],
+  kind: DisplayImage['kind'],
 ) {
   // Each variant exposes only the image resource it reads.
   const imageLayout: GPUBindGroupLayoutEntry =
@@ -55,8 +57,7 @@ async function createCausticPipeline(
     },
     fragment: {
       module,
-      entryPoint:
-        kind === 'buffer' ? 'fragmentBuffer' : 'fragmentTexture',
+      entryPoint: { buffer: 'fragmentBuffer', texture: 'fragmentTexture', rgb: 'fragmentRGB' }[kind],
       targets: [{ format }],
     },
     primitive: {
@@ -106,7 +107,7 @@ function createCausticBindGroup(
   device: GPUDevice,
   layout: GPUBindGroupLayout,
   uniformBuffer: GPUBuffer,
-  image: CausticImage,
+  image: DisplayImage,
 ) {
   // Bind the producer's GPU resource directly.
   const imageEntry: GPUBindGroupEntry =
@@ -140,8 +141,8 @@ function createCausticBindGroup(
 }
 
 export interface CausticDisplay {
-  prepare(kind: CausticImage['kind']): Promise<void>
-  setImage(image: CausticImage): void
+  prepare(kind: DisplayImage['kind']): Promise<void>
+  setImage(image: DisplayImage): void
   setExposure(exposure: number): void
   draw(pass: GPURenderPassEncoder): void
   destroy(): void
@@ -154,8 +155,8 @@ export function createCausticDisplay(
   const uniforms = createDisplayUniforms(device)
 
   type Pipeline = Awaited<ReturnType<typeof createCausticPipeline>>
-  const pipelines = new Map<CausticImage['kind'], Pipeline>()
-  const preparing = new Map<CausticImage['kind'], Promise<void>>()
+  const pipelines = new Map<DisplayImage['kind'], Pipeline>()
+  const preparing = new Map<DisplayImage['kind'], Promise<void>>()
 
   // Reuse bindings when the producer alternates GPU resources.
   let bindings = new WeakMap<
@@ -164,7 +165,7 @@ export function createCausticDisplay(
   >()
 
   let active: {
-    image: CausticImage
+    image: DisplayImage
     pipeline: GPURenderPipeline
     bindGroup: GPUBindGroup
   } | null = null

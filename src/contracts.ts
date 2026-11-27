@@ -57,11 +57,16 @@ export interface TriangleBeamField {
 export interface TargetImage {
   width: number
   height: number
+  // Changes when the coverage changes. The lens optimizer keys its run to this value.
   version: number
 
   // Linear shape weights in [0, 1]; no gamma decoding.
   // Row-major, starting at optical -Y (the top row of the drawing pad).
   values: Float32Array
+  // Optional unpremultiplied, linear RGB transmission, three floats per pixel
+  // in the same row order. Omitted for white light. Coverage stays in values.
+  colors?: Float32Array
+  colorVersion?: number
 }
 
 export interface ReceiverPlane {

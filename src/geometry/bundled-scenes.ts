@@ -1,17 +1,25 @@
 import skateCredit from '../../scene/greer-skatepark/CREDITS.md?url&no-inline'
 import fairCredit from '../../scene/fairground/CREDITS.md?url&no-inline'
+import coveCredit from '../../scene/smugglers-cove/CREDITS.md?url&no-inline'
 import { readObjAsset } from './obj-materials'
 
 export const bundledScenes = {
-  'greer-skatepark': { name: 'Greer Park Skating Bowl', author: 'scott.anderson', credit: skateCredit },
-  fairground: { name: 'Fairground', author: 'Brian Trepanier', credit: fairCredit },
+  'greer-skatepark': { name: 'Greer Park Skating Bowl', attribution: 'Model by scott.anderson · CC BY 4.0', credit: skateCredit },
+  fairground: { name: 'Fairground', attribution: 'Model by Brian Trepanier · CC BY 4.0', credit: fairCredit },
+  'smugglers-cove': {
+    name: 'Smuggler’s Cove · Tidal Landing', attribution: 'Poly Haven assets · CC0', credit: coveCredit,
+    roomCamera: { azimuth: -0.43, elevation: 0.65 },
+  },
 } as const
 export type BundledScene = keyof typeof bundledScenes
 export const defaultScene: BundledScene = 'greer-skatepark'
 
 // Vite emits local asset URLs with the deployment base and cache hashes.
 const assets = import.meta.glob<string>(
-  '../../scene/{greer-skatepark,fairground}/**/*.{obj,mtl,png,jpg,jpeg,webp}',
+  [
+    '../../scene/{greer-skatepark,fairground}/**/*.{obj,mtl,png,jpg,jpeg,webp}',
+    '../../scene/smugglers-cove/preview/**/*.{obj,mtl,png,jpg,jpeg,webp,avif,bmp}',
+  ],
   { eager: true, query: '?url&no-inline', import: 'default' },
 )
 
@@ -19,7 +27,16 @@ export async function readBundledScene(id: BundledScene, signal?: AbortSignal) {
   const root = '../../scene/' + id + '/'
   const entries = Object.entries(assets).filter(([path]) => path.startsWith(root))
   if (!entries.some(([path]) => path.endsWith('.obj'))) {
-    throw new Error('The model files are missing from scene/' + id + '/.')
+    if (id !== 'smugglers-cove') throw new Error('The model files are missing from scene/' + id + '/.')
+    try {
+      const { readCovePreview } = await import('./smugglers-cove-preview')
+      return await readCovePreview(signal)
+    } catch (error) {
+      if (!signal?.aborted && error instanceof TypeError && /fetch|network|load failed/i.test(error.message)) {
+        throw new Error('No local copy is installed. The first download needs a connection to Poly Haven.', { cause: error })
+      }
+      throw error
+    }
   }
   const files = await Promise.all(entries.map(async ([path, url]) => {
     const response = await fetch(url, { signal })

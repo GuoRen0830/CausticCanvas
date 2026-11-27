@@ -45,8 +45,8 @@ function buildFloorMesh({ sizeX, sizeY, z }: ReceiverPlane): SceneMesh {
 
 // Assemble once and share the resulting mesh with the design view and both renderers.
 // Custom model positions must already be in lens-local meters.
-export function buildSceneGeometry(receiver: ReceiverPlane, { mesh: model }: { mesh: SceneMesh }): SceneGeometry {
-  const floor = buildFloorMesh(receiver)
+export function buildSceneGeometry(receiver: ReceiverPlane,
+  { mesh: model, receiverFloor = true }: { mesh: SceneMesh; receiverFloor?: boolean }): SceneGeometry {
   const vertexCount = model.vertices.length / sceneVertexStride
   if (!Number.isInteger(vertexCount) || !model.indices.length || model.indices.length % 3 !== 0) {
     throw new Error('Expected an indexed triangle model.')
@@ -57,6 +57,12 @@ export function buildSceneGeometry(receiver: ReceiverPlane, { mesh: model }: { m
       throw new Error('Model vertices must be non-floor vertices with object IDs from 2 to 0xffffff.')
     }
   }
+  if (model.indices.some(index => index >= vertexCount)) throw new Error('Model vertex index out of range.')
+  if (model.uvs && model.uvs.length !== 2 * vertexCount) throw new Error('Expected one UV pair per model vertex.')
+  // Terrain and street scenes already contain the receiving surface. Use it
+  // for both drawing and ray hits, leaving areas outside its outline empty.
+  if (!receiverFloor) return { mesh: model }
+  const floor = buildFloorMesh(receiver)
   const vertices = new Float32Array(floor.vertices.length + model.vertices.length)
   vertices.set(floor.vertices)
   vertices.set(model.vertices, floor.vertices.length)
@@ -64,13 +70,10 @@ export function buildSceneGeometry(receiver: ReceiverPlane, { mesh: model }: { m
   indices.set(floor.indices)
   const offset = floor.vertices.length / sceneVertexStride
   for (let i = 0; i < model.indices.length; i++) {
-    const index = model.indices[i]
-    if (index >= vertexCount) throw new Error('Model vertex index out of range.')
-    indices[floor.indices.length + i] = offset + index
+    indices[floor.indices.length + i] = offset + model.indices[i]
   }
   const mesh: SceneMesh = { vertices, indices }
   if (model.uvs) {
-    if (model.uvs.length !== 2 * vertexCount) throw new Error('Expected one UV pair per model vertex.')
     mesh.uvs = new Float32Array(2 * offset + model.uvs.length)
     mesh.uvs.set(model.uvs, 2 * offset)
   }
