@@ -3,11 +3,14 @@ import { mat4 } from 'wgpu-matrix'
 import { config, incidentColumnHeight } from './config'
 import { initializeGPU } from './gpu/context'
 import { createDrawingPad } from './ui/drawing-pad'
+import { createImageExport } from './ui/image-export'
 import { bundledScenes, defaultScene, readBundledScene, type BundledScene } from './geometry/bundled-scenes'
 import { readObjAsset } from './geometry/obj-materials'
+import type { CoveSourceState } from './geometry/cove-source-textures'
 import { placeObjOnReceiver } from './geometry/place-obj'
 import { createOrbitCamera, type OrbitCameraOptions } from './rendering/orbit-camera'
-import { buildSceneGeometry } from './rendering/scene-mesh'
+import { roomViewport } from './rendering/room-viewport'
+import { buildSceneGeometry, type SceneMapSlot, type SceneMaterial } from './rendering/scene-mesh'
 import type { BeamView } from './rendering/beam-renderer'
 import { createFrameLoop } from './frame-loop'
 import { buildDesignView } from './optics/design-view'
@@ -19,15 +22,35 @@ function element<K extends keyof HTMLElementTagNameMap>(id: string, tag: K) {
   return node
 }
 
+async function readImportedModel(model: File, files: File[], signal: AbortSignal) {
+  if (/\.obj$/i.test(model.name)) return readObjAsset(model, files)
+  const { readGltfAsset } = await import('./geometry/gltf-asset')
+  return readGltfAsset(model, files, signal)
+}
+
 const lifetime = new AbortController()
 if (import.meta.hot) import.meta.hot.dispose(() => lifetime.abort())
+
+const materialDebug: Partial<Record<BeamView, { slots?: SceneMapSlot[]; legend?: string }>> = {
+  albedo: { slots: ['map'] },
+  normals: { slots: ['normalMap'] },
+  'geometric-normals': {},
+  'normal-map': { slots: ['normalMap'], legend: 'Flat = blue-purple · No map = black' },
+  roughness: { slots: ['roughnessMap', 'metallicRoughnessMap'], legend: 'Black = smooth · White = rough' },
+  metallic: { slots: ['metallicMap', 'metallicRoughnessMap'], legend: 'Black = dielectric · White = metal' },
+  occlusion: { slots: ['occlusionMap'], legend: 'Black = occluded · White = open' },
+  emissive: { slots: ['emissiveMap'] },
+  'map-coverage': { legend: 'Red = normal · Green = roughness · Blue = metallic' },
+}
+const usesRoomFraming = (mode: BeamView) => mode === 'lit' || mode in materialDebug
 
 async function main() {
   const canvas = element('gpu-canvas', 'canvas'), causticCanvas = element('caustic-canvas', 'canvas')
   const targetCanvas = element('target-canvas', 'canvas'), clearButton = element('clear-target', 'button')
   const status = element('status', 'p'), causticStatus = element('caustic-status', 'p')
   const sceneStatus = element('scene-status', 'p')
-  const importButton = element('import-obj', 'button'), objFile = element('obj-file', 'input')
+  const restoreButton = element('restore-textures', 'button')
+  const importButton = element('import-model', 'button'), modelFiles = element('model-files', 'input')
   const folderButton = element('import-folder', 'button'), folderInput = element('asset-folder', 'input')
   const sceneSelect = element('bundled-scene', 'select'), beamSelect = element('beam-view', 'select')
   const credit = element('scene-credit', 'a')
@@ -37,12 +60,18 @@ async function main() {
   const brushColor = element('brush-color', 'input'), swatches = element('brush-swatches', 'div')
   const recolor = element('recolor', 'button')
   const debugControl = element('debug-control', 'div')
-  const roomOptions = element('room-options', 'label')
+  const debugLegend = element('debug-legend', 'output')
+  const roomOptions = element('room-options', 'fieldset')
+  const roomMaterials = element('room-materials', 'input')
   const lightPaths = element('light-paths', 'input')
   const viewButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#view-switch button[data-view]'))
   let currentView: BeamView = 'lit'
   for (const [id, preset] of Object.entries(bundledScenes)) sceneSelect.add(new Option(preset.name, id))
-  const requestedScene = new URLSearchParams(location.search).get('scene')
+  const query = new URLSearchParams(location.search)
+  const requestedScene = query.get('scene')
+  const requestedView = query.get('view')
+  const initialView = Array.from(beamSelect.options).some(option => option.value === requestedView)
+    ? requestedView as BeamView : 'lit'
   const initialScene = requestedScene && Object.hasOwn(bundledScenes, requestedScene)
     ? requestedScene as BundledScene : defaultScene
   sceneSelect.value = initialScene
@@ -58,10 +87,78 @@ async function main() {
   let hasTarget = false, optimizationDone = false, switching = false
   let runStarted = 0, runTimer: number | undefined
   let activeLabel = '', activePreset: BundledScene | undefined
+  let originalMaps: { source: CoveSourceState; materials: Map<string, SceneMaterial>; missing: number; upgrades: number } | undefined
+  let restoreRequest: AbortController | undefined
+  let materialUpload: Promise<void> | undefined
+  let exportJob: Promise<ImageData> | undefined
+  let exportStarted: number | undefined
+
+  function updateMaterialLegend() {
+    const info = materialDebug[currentView]
+    const coverage = info?.slots && active?.mapCoverage(info.slots)
+    const summary = coverage?.materials ? `Mapped materials ${coverage.mapped}/${coverage.materials}` : ''
+    const text = [info?.legend, summary].filter(Boolean).join('\n')
+    debugLegend.textContent = text
+    debugLegend.hidden = !text
+    debugLegend.title = coverage?.triangles ? `${(100 * coverage.mappedTriangles / coverage.triangles).toFixed(1)}% of triangles assigned a material sample this channel from a texture.` : ''
+  }
+
+  function updateRestoreButton() {
+    const pending = originalMaps ? originalMaps.missing + originalMaps.upgrades : 0
+    restoreButton.hidden = !pending
+    restoreButton.disabled = switching || !!restoreRequest || events.signal.aborted
+    restoreButton.textContent = restoreRequest ? 'Loading original maps…' : `Load original maps (${pending})`
+  }
+
+  async function restoreOriginalMaps() {
+    const owner = active, maps = originalMaps
+    if (!owner || !maps || (!maps.missing && !maps.upgrades) || switching || restoreRequest) return
+    const request = new AbortController()
+    restoreRequest = request
+    updateRestoreButton()
+    try {
+      const result = await maps.source.restore(maps.materials, request.signal)
+      request.signal.throwIfAborted()
+      const restored = (maps.missing - result.missing) + (maps.upgrades - result.upgrades)
+      if (restored > 0) {
+        // Keep all tiles of an export on the same material set.
+        while (exportJob) {
+          await exportJob.catch(() => {})
+          request.signal.throwIfAborted()
+        }
+        const upload = owner.replaceMaterials(result.materials, request.signal)
+        materialUpload = upload
+        try { await upload }
+        finally { if (materialUpload === upload) materialUpload = undefined }
+        request.signal.throwIfAborted()
+        maps.materials = result.materials
+        updateMaterialLegend()
+        frameLoop?.requestFrame()
+      }
+      maps.missing = result.missing
+      maps.upgrades = result.upgrades
+      const message = restored > 0 ? `Loaded ${restored} original maps.` : ''
+      const missing = result.missing && result.warnings.length
+        ? `${result.missing} original maps unavailable. Showing local materials.` : ''
+      const upgrades = result.upgrades && result.warnings.length
+        ? `Using the bundled resolution for ${result.upgrades} maps.` : ''
+      sceneStatus.textContent = [message, missing, upgrades, !missing && !upgrades ? result.warnings[0] : ''].filter(Boolean).join(' ')
+      sceneStatus.title = result.warnings.join('\n')
+    } catch (error) {
+      if (!request.signal.aborted) sceneStatus.textContent = error instanceof Error ? error.message : String(error)
+    } finally {
+      if (restoreRequest === request) {
+        restoreRequest = undefined
+        updateRestoreButton()
+      }
+    }
+  }
+  restoreButton.addEventListener('click', () => { void restoreOriginalMaps() }, events)
 
   lifetime.signal.addEventListener('abort', () => {
+    restoreRequest?.abort()
     importButton.disabled = folderButton.disabled = true
-    sceneSelect.disabled = lightPaths.disabled = true
+    sceneSelect.disabled = roomOptions.disabled = true
     frameLoop?.destroy()
     camera?.destroy()
     pad?.destroy()
@@ -92,7 +189,53 @@ async function main() {
   camera = createOrbitCamera(canvas, defaultFraming, () => frameLoop?.requestFrame())
   const viewportTransform = mat4.identity()
 
-  const seconds = () => Math.round((performance.now() - runStarted) / 1000)
+  function composition() {
+    const panelRect = panel.getBoundingClientRect()
+    return roomViewport(Math.max(1, canvas.clientWidth), Math.max(1, canvas.clientHeight),
+      panelRect.right, panelRect.top, topbar.getBoundingClientRect().bottom)
+  }
+
+  const imageExport = createImageExport({
+    signal: events.signal,
+    getScene() {
+      if (!active || switching || events.signal.aborted) return
+      const rect = composition()
+      return {
+        name: activeLabel, aspect: rect.width / rect.height,
+        materialMode: roomMaterials.checked ? 'pbr' : 'basecolor',
+      }
+    },
+    async render(request) {
+      if (!active || !frameLoop || switching || exportJob) throw new Error('The scene is busy. Try again in a moment.')
+      const owner = active, loop = frameLoop
+      const viewProjection = mat4.copy(camera!.update(request.width / request.height, roomFraming))
+      const signal = AbortSignal.any([request.signal, events.signal])
+      const started = performance.now(), trainingSince = runTimer === undefined ? undefined : runStarted
+      exportStarted = started
+      loop.setPaused(true)
+      const job = (async () => {
+        if (materialUpload) await materialUpload.catch(() => {})
+        await device.queue.onSubmittedWorkDone()
+        signal.throwIfAborted()
+        return owner.exportImage({ ...request, signal, viewProjection })
+      })()
+      exportJob = job
+      try { return await job }
+      finally {
+        exportJob = undefined
+        exportStarted = undefined
+        if (trainingSince === runStarted && runTimer !== undefined && active === owner) {
+          runStarted += performance.now() - started
+        }
+        if (!events.signal.aborted && active === owner) {
+          loop.setPaused(false)
+          loop.requestFrame()
+        }
+      }
+    },
+  })
+
+  const seconds = () => Math.max(0, Math.round(((exportStarted ?? performance.now()) - runStarted) / 1000))
   function updateRunState() {
     const running = !!active?.canOptimize && hasTarget && !optimizationDone
     frameLoop?.setRunning(running)
@@ -120,7 +263,8 @@ async function main() {
     const debug = mode !== 'lit'
     debugControl.hidden = !debug
     roomOptions.hidden = debug
-    const framing = debug ? sceneFraming : roomFraming
+    updateMaterialLegend()
+    const framing = usesRoomFraming(mode) ? roomFraming : sceneFraming
     if (currentFraming !== framing) {
       camera!.frame(framing)
       currentFraming = framing
@@ -129,6 +273,10 @@ async function main() {
     frameLoop?.requestFrame()
   }
   beamSelect.addEventListener('change', () => changeView(beamSelect.value as BeamView), events)
+  roomMaterials.addEventListener('change', () => {
+    active?.setMaterialsEnabled(roomMaterials.checked)
+    frameLoop?.requestFrame()
+  }, events)
   lightPaths.addEventListener('change', () => {
     active?.setLightPathsVisible(lightPaths.checked)
     frameLoop?.requestFrame()
@@ -189,20 +337,15 @@ async function main() {
       canvas.height = height
     }
     const encoder = device.createCommandEncoder()
-    const panelRect = panel.getBoundingClientRect()
-    const wide = cssWidth > 760
-    const left = wide ? panelRect.right / cssWidth : 0
-    const top = mode === 'lit' ? topbar.getBoundingClientRect().bottom / cssHeight : 0
-    const bottom = mode === 'lit' && !wide ? panelRect.top / cssHeight : 1
+    const rect = composition()
+    const roomFramed = usesRoomFraming(mode)
     // Fit Room in the visible rectangle. The projection still maps to the full
     // canvas, so camera rays and G-buffer depth keep the same pixel coordinates.
-    const widthFraction = mode === 'lit' ? 1 - left : 1
-    const heightFraction = Math.max(0.01, bottom - top)
-    const viewProjection = camera!.update((width / height) * widthFraction / heightFraction)
-    viewportTransform[0] = widthFraction
-    viewportTransform[5] = heightFraction
-    viewportTransform[12] = left
-    viewportTransform[13] = 1 - top - bottom
+    const viewProjection = camera!.update(roomFramed ? rect.width / rect.height : width / height)
+    viewportTransform[0] = roomFramed ? rect.width / cssWidth : 1
+    viewportTransform[5] = roomFramed ? rect.height / cssHeight : 1
+    viewportTransform[12] = rect.left / cssWidth
+    viewportTransform[13] = roomFramed ? 1 - (2 * rect.top + rect.height) / cssHeight : 0
     mat4.multiply(viewportTransform, viewProjection, viewProjection)
     const done = scene.render(encoder, context.getCurrentTexture(), previewContext!.getCurrentTexture(),
       viewProjection, mode, steps)
@@ -215,20 +358,29 @@ async function main() {
     return commands
   }
 
-  async function loadScene(source: BundledScene | File, files: File[] = []) {
+  async function loadScene(source: BundledScene | File, files: File[] = [], view: BeamView = 'lit') {
     if (switching || events.signal.aborted) return
+    restoreRequest?.abort()
+    restoreRequest = undefined
     switching = true
-    lightPaths.disabled = true
+    imageExport.refresh()
+    updateRestoreButton()
+    roomOptions.disabled = true
     importButton.disabled = folderButton.disabled = sceneSelect.disabled = true
     const preset = typeof source === 'string' ? bundledScenes[source] : undefined
     const name = typeof source === 'string' ? bundledScenes[source].name : source.name
     const roomCamera = preset && 'roomCamera' in preset ? preset.roomCamera : undefined
+    sceneStatus.title = ''
     sceneStatus.textContent = `Loading ${name}…`
     let candidate: SceneSession | undefined
+    let loaded = false
     let warnings = new Set<string>()
     try {
-      const asset = typeof source === 'string'
-        ? await readBundledScene(source, events.signal) : await readObjAsset(source, files)
+      if (exportJob) await exportJob.catch(() => {})
+      if (events.signal.aborted) return
+      const asset: Awaited<ReturnType<typeof readImportedModel>> & { sourceTextures?: CoveSourceState } =
+        typeof source === 'string' ? await readBundledScene(source, events.signal)
+        : await readImportedModel(source, files, events.signal)
       if (events.signal.aborted) return
       warnings = asset.warnings
       const bounds = placeObjOnReceiver(asset.mesh, lens, receiver)
@@ -262,6 +414,7 @@ async function main() {
         candidate = await createSceneSession(device, format, opticalToWorld, geometry, fitted, designView,
           message => warnings.add(message))
         if (events.signal.aborted) return
+        candidate.setMaterialsEnabled(roomMaterials.checked)
         candidate.setLightPathsVisible(lightPaths.checked)
         // Include G-buffer allocation and first-hit splatting in the same validation scope.
         device.queue.submit([drawSceneFrame(candidate, 0, 'lit').commands])
@@ -296,6 +449,10 @@ async function main() {
       active?.destroy()
       pad = newPad
       active = next
+      originalMaps = asset.sourceTextures ? {
+        source: asset.sourceTextures, materials: asset.materials,
+        missing: asset.sourceTextures.missing, upgrades: asset.sourceTextures.upgrades,
+      } : undefined
       candidate = undefined
       sceneFraming = framing
       const aperture = next.state.lens
@@ -322,47 +479,52 @@ async function main() {
       }
       // The model credit lives in the scene picker's tooltip.
       sceneSelect.title = activePreset ? credit.textContent : ''
-      changeView('lit')
+      if (view !== 'lit') beamSelect.value = view
+      changeView(view)
       activeLabel = name
       sceneStatus.textContent = [...warnings].join(' ')
       status.textContent = ''
+      loaded = true
     } catch (error) {
       if (events.signal.aborted) return
       const reason = error instanceof Error ? error.message : String(error)
       sceneStatus.textContent = `Could not load ${name}. ${reason} ` +
-        (active ? `Current scene: ${activeLabel}.` : 'Select a scene or import an OBJ folder.')
+        (active ? `Current scene: ${activeLabel}.` : 'Select a scene or open a model.')
       sceneSelect.value = activePreset ?? ''
       if (!active) status.textContent = 'Waiting for a scene.'
     } finally {
       candidate?.destroy()
       switching = false
+      updateRestoreButton()
+      imageExport.refresh()
       if (!events.signal.aborted) importButton.disabled = folderButton.disabled = sceneSelect.disabled = false
       if (!events.signal.aborted && active) {
-        lightPaths.disabled = false
+        roomOptions.disabled = false
         frameLoop ??= createFrameLoop(device, encodeFrame, { maxStepsPerFrame: config.maxStepsPerFrame, onError: fail })
         updateRunState()
         frameLoop.requestFrame()
+        if (loaded && originalMaps) void restoreOriginalMaps()
       }
     }
   }
 
-  importButton.addEventListener('click', () => objFile.click(), events)
+  importButton.addEventListener('click', () => modelFiles.click(), events)
   folderButton.addEventListener('click', () => folderInput.click(), events)
-  for (const picker of [objFile, folderInput]) {
+  for (const picker of [modelFiles, folderInput]) {
     picker.addEventListener('change', () => {
       const files = Array.from(picker.files ?? [])
       picker.value = ''
       if (!files.length) return
-      const models = files.filter(file => /\.obj$/i.test(file.name))
+      const models = files.filter(file => /\.(glb|gltf|obj)$/i.test(file.name))
       if (models.length !== 1) {
-        sceneStatus.textContent = `Found ${models.length} OBJ files. Select one OBJ and its material files with Import OBJ. Current scene: ${activeLabel}.`
+        sceneStatus.textContent = `Found ${models.length} models. Choose one GLB, glTF or OBJ together with its companion files.`
         return
       }
       void loadScene(models[0], files)
     }, events)
   }
   sceneSelect.addEventListener('change', () => { void loadScene(sceneSelect.value as BundledScene) }, events)
-  await loadScene(initialScene)
+  await loadScene(initialScene, [], initialView)
 }
 
 main().catch((error: unknown) => {

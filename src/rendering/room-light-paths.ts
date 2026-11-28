@@ -5,9 +5,9 @@ import { createRoomGlass } from './room-glass'
 import { createVolumeMarch } from './volume-march'
 
 // Each orbit re-integrates the same refracted light field along the new camera rays.
-export function createRoomLightPaths(device: GPUDevice, layout: GPUBindGroupLayout) {
-  const volume = createBeamVolume(device)
-  const march = createVolumeMarch(device)
+export function createRoomLightPaths(device: GPUDevice, layout: GPUBindGroupLayout, fullResolution = false) {
+  const volume = createBeamVolume(device, fullResolution)
+  const march = createVolumeMarch(device, fullResolution)
   const glass = createRoomGlass(device)
   let sampledResult: ForwardResult | undefined
   let sampledFilter: GPUTextureView | undefined

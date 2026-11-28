@@ -1,5 +1,7 @@
 import linen from '../../scene/smugglers-cove/market-linen.png?inline'
 import { HarborMesh, quayLevel } from './cove-quayside'
+import { fish } from './cove-catch'
+import { addAuctionHall, auctionFront } from './cove-auction-hall'
 import { shoreHeight } from './cove-shore'
 
 type Point = [number, number, number]
@@ -9,7 +11,8 @@ const rear = [-4.10, -4.03, -4.02, -4.05]
 const crest = [2.34, 2.45, 2.40, 2.32]
 const edge = [2.05, 2.01, 2.01, 2.05]
 const indigo = 'fish market indigo', ivory = 'fish market sailcloth', ochre = 'fish market marigold'
-const enamel = 'fish market enamel', silver = 'fish market silver', mackerel = 'fish market mackerel'
+const enamel = 'fish market enamel'
+const madder = 'fish market madder'
 const saltwood = 'salt-bleached slats'
 const mix = (a: number, b: number, t: number) => a + (b-a)*t
 const linenBytes = Uint8Array.from(atob(linen.slice(linen.indexOf(',')+1)), c => c.charCodeAt(0))
@@ -25,12 +28,13 @@ function point(bay: number, u: number, v: number, y: number): Point {
 function cloth(bay: number, u: number, v: number): Point {
   const ridge = mix(crest[bay], crest[bay+1], u), eave = mix(edge[bay], edge[bay+1], u)
   const belly = Math.sin(Math.PI*v) * (0.072+0.048*Math.sin(Math.PI*u))
-  return point(bay, u, 0.06+0.76*v, mix(ridge, eave, v)-belly-0.037*Math.sin(Math.PI*u))
+  const tip = point(bay,u,0.82,eave)
+  return [tip[0],mix(ridge,eave,v)-belly-0.037*Math.sin(Math.PI*u),mix(auctionFront+0.053,tip[2],v)]
 }
 
 function makeAwning(mesh: HarborMesh, bay: number) {
   const under = (p: Point, drop = 0.012): Point => [p[0], p[1]-drop, p[2]]
-  const stripes = bay === 0 ? [indigo,ivory,indigo,ivory,indigo] : [ivory,indigo,ivory,indigo,ivory]
+  const stripes = bay === 0 ? [indigo,ivory,indigo,ivory,indigo] : [madder,ivory,madder,ivory,madder]
   for (let i = 0; i < stripes.length; i++) {
     const l = i/stripes.length, r = (i+1)/stripes.length, mat = stripes[i]
     for (let j = 0; j < 5; j++) {
@@ -65,7 +69,8 @@ function makeAwning(mesh: HarborMesh, bay: number) {
 function rolledAwning(mesh: HarborMesh) {
   const rings = [0,0.06,0.18,0.23,0.28,0.39,0.58,0.70,0.75,0.80,0.94,1]
   function ring(u: number, angle: number): Point {
-    const t = point(1,u,0.11,mix(crest[1],crest[2],u)-0.046*Math.sin(Math.PI*u))
+    const t = cloth(1,u,0)
+    t[2] += 0.08
     const r = 0.078 - 0.025*(Math.exp(-((u-0.23)**2)/0.0012)+Math.exp(-((u-0.75)**2)/0.0012))
     return [t[0],t[1]+r*Math.cos(angle),t[2]+r*Math.sin(angle)]
   }
@@ -81,35 +86,6 @@ function rolledAwning(mesh: HarborMesh) {
   for (const u of [0.23,0.75]) {
     const p = ring(u,Math.PI/2)
     mesh.beam('hemp rope',p,[p[0]+0.018,p[1]-0.18,p[2]+0.015],0.016,0.016)
-  }
-}
-
-// The catch has a dark dorsal half, pale belly and a forked, pinched tail.
-// The same little model is turned upright to hang as the fishmonger's sign.
-function fish(mesh: HarborMesh, origin: Point, length: number, heading: number, sign = false) {
-  const [x,y,z] = origin, co = Math.cos(heading), si = Math.sin(heading)
-  const transform = (s: number, w: number, h: number): Point => sign
-    ? [x+length*s,y+length*w,z+length*h]
-    : [x+length*(s*co-w*si),y+length*h,z+length*(s*si+w*co)]
-  const normal = (s: number, w: number, h: number): Point => sign ? [s,w,h] : [s*co-w*si,h,s*si+w*co]
-  const sections = [[-0.30,0.032,0.023],[-0.07,0.104,0.061],[0.16,0.112,0.071],[0.33,0.065,0.047],[0.44,0.013,0.012]]
-  const rings = sections.map(([s,w,h]) => Array.from({length:8},(_,j)=>transform(s,w*Math.cos(j*Math.PI/4),h*Math.sin(j*Math.PI/4))))
-  for (let i = 1; i < rings.length; i++) for (let j = 0; j < 8; j++) {
-    const k = (j+1)%8, a = (j+0.5)*Math.PI/4
-    mesh.face(sign ? ochre : Math.cos(a) > 0 ? mackerel : silver,
-      [rings[i-1][j],rings[i][j],rings[i][k],rings[i-1][k]],normal(0,Math.cos(a),Math.sin(a)))
-  }
-  mesh.face(sign ? ochre : mackerel,rings[0],normal(-1,0,0))
-  mesh.face(sign ? ochre : silver,rings.at(-1)!,normal(1,0,0))
-  for (const side of [-1,1]) {
-    const base = transform(-0.32,0.008*side,0), tip = transform(-0.52,0.145*side,0)
-    const notch = transform(-0.46,0,0), top = transform(-0.415,0.04*side,0.018), low = transform(-0.415,0.04*side,-0.018)
-    const outline = [base,tip,notch]
-    for (let i = 0; i < outline.length; i++) {
-      const j = (i+1)%outline.length
-      mesh.face(sign ? ochre : silver,[outline[i],outline[j],top],normal(0,0,1))
-      mesh.face(sign ? ochre : silver,[outline[i],outline[j],low],normal(0,0,-1))
-    }
   }
 }
 
@@ -134,15 +110,64 @@ function creel(mesh: HarborMesh,x: number,y: number,z: number,r: number) {
 }
 
 function scale(mesh: HarborMesh) {
-  const end=point(1,0.82,0.44,2.28)
-  mesh.beam('sawn cedar',point(1,0.82,0.07,2.38),end,0.04,0.058)
-  const [x,,z]=end, y=1.72
-  mesh.beam('wrought iron',end,[x,y+0.24,z],0.015,0.015)
-  for (let k=0; k<3; k++) {
-    const a=2*Math.PI*k/3
-    mesh.beam('hemp rope',[x,y+0.24,z],[x+0.13*Math.cos(a),y,z+0.13*Math.sin(a)],0.009,0.009)
+  const end=point(1,0.47,0.44,2.28)
+  mesh.beam('sawn cedar',cloth(1,0.47,0),end,0.041,0.058)
+  const [x,,z]=end, pivot=1.992
+  mesh.beam('wrought iron',end,[x,pivot,z],0.022,0.022)
+  for (const side of [-1,1]) {
+    const cx=x+side*0.263, tip: Point=[cx,pivot+side*0.028,z], rim=tip[1]-0.222
+    mesh.beam('aged zinc',[x,pivot,z],tip,0.025,0.027)
+    const ring = (k: number,r: number,h: number): Point =>
+      [cx+r*Math.cos(k*Math.PI/7),rim+h,z+r*Math.sin(k*Math.PI/7)]
+    for (let k=0; k<14; k++) {
+      mesh.face('aged zinc',[ring(k,0.132,0),ring(k+1,0.132,0),ring(k+1,0.055,-0.033),ring(k,0.055,-0.033)],[0,1,0])
+      mesh.face('aged zinc',[ring(k,0.136,-0.004),ring(k+1,0.136,-0.004),ring(k+1,0.055,-0.041),ring(k,0.055,-0.041)],[0,-1,0])
+      mesh.face('aged zinc',[ring(k,0.132,0),ring(k+1,0.132,0),ring(k+1,0.136,-0.004),ring(k,0.136,-0.004)],[0,1,0])
+    }
+    mesh.face('aged zinc',Array.from({length:14},(_,k)=>ring(k,0.055,-0.033)),[0,1,0])
+    mesh.face('aged zinc',Array.from({length:14},(_,k)=>ring(k,0.055,-0.041)),[0,-1,0])
+    for (let k=0; k<3; k++) {
+      const a=2*Math.PI*k/3
+      mesh.beam('hemp rope',tip,[cx+0.13*Math.cos(a),rim,z+0.13*Math.sin(a)],0.01,0.01)
+    }
+    if (side<0) mesh.column('wrought iron',cx,z,[[rim-0.033,0.045],[rim+0.024,0.037],[rim+0.031,0.019]],10)
   }
-  mesh.column('aged zinc',x,z,[[y-0.055,0.059],[y-0.012,0.144],[y,0.141]],14)
+}
+
+// Two valves meet at a common hinge. Alternating ribs run out to the fluted
+// edge. The open shell exposes a pearly inner face to light from the sky.
+function scallop(mesh: HarborMesh, x: number, y: number, z: number, size: number, heading: number, open = false) {
+  const c = Math.cos(heading), s = Math.sin(heading), ribs = 16
+  const valve = (angle: number, innerUp: boolean) => {
+    const top = innerUp ? 'tidepool nacre' : 'limpet shell', underside = innerUp ? 'limpet shell' : 'tidepool nacre'
+    const cs = Math.cos(angle), sn = Math.sin(angle)
+    const outward: Point = [s*sn,cs,-c*sn], inward: Point = [-outward[0],-outward[1],-outward[2]]
+    const surface = (k: number,r: number, thickness: number): Point => {
+      const a = (k/ribs-0.5)*1.98
+      const reach = r*(0.87+0.13*Math.cos(a)+(k%2 ? -0.026 : 0))
+      const along = reach*Math.cos(a), across = reach*Math.sin(a)*0.83
+      const arch = Math.sin(r*Math.PI)*Math.cos(a)*0.21 + (k%2 ? 0.006 : 0.043)*r
+      const h = (innerUp ? -arch : arch) + thickness
+      const forward = (along*cs-h*sn)*size
+      return [x+c*across*size-s*forward,y+(along*sn+h*cs)*size,z+s*across*size+c*forward]
+    }
+    for (let i=0; i<ribs; i++) {
+      for (const [h,mat,n] of [[0,top,outward],[-0.035,underside,inward]] as const) {
+        mesh.face(mat,[surface(0,0,h),surface(i,0.52,h),surface(i+1,0.52,h)],n)
+        mesh.face(mat,[surface(i,0.52,h),surface(i,1,h),surface(i+1,1,h),surface(i+1,0.52,h)],n)
+      }
+      const lip = [surface(i,1,0),surface(i+1,1,0),surface(i+1,1,-0.035),surface(i,1,-0.035)]
+      const theta=(i+0.5)*1.98/ribs-0.99, nx=Math.sin(theta), nz=Math.cos(theta)
+      mesh.face('tidepool nacre',lip,[c*nx-s*nz*cs,nz*sn,s*nx+c*nz*cs])
+    }
+    for (const i of [0,ribs]) {
+      const n: Point = [c*(i ? 1 : -1),0,s*(i ? 1 : -1)]
+      for (const [a,b] of [[0,0.52],[0.52,1]]) mesh.face(underside,
+        [surface(i,a,0),surface(i,b,0),surface(i,b,-0.035),surface(i,a,-0.035)],n)
+    }
+  }
+  valve(0,open)
+  if (open) valve(1.68,false)
 }
 
 function counter(mesh: HarborMesh,bay: number) {
@@ -163,8 +188,64 @@ function counter(mesh: HarborMesh,bay: number) {
       mesh.box(enamel,x+dx,top+0.058,z+side*0.17,0.473,0.055,0.012)
       mesh.box(enamel,x+dx+side*0.230,top+0.058,z,0.012,0.055,0.334)
     }
+    if (bay === 2 && dx > 0) {
+      for (const [offset,forward,size,yaw] of [[-0.128,-0.087,0.119,-0.34],[0.017,-0.105,0.126,0.17],
+        [0.133,-0.053,0.100,0.50],[-0.107,0.052,0.103,-0.31],[0.061,0.057,0.104,0.34]]) {
+        const open = offset === 0.017
+        scallop(mesh,x+dx+offset,top+0.042+size*(open ? 0.245 : 0.035),z+forward,size,yaw,open)
+      }
+      continue
+    }
     for (let j = 0; j < 3; j++) fish(mesh,[x+dx+(j-1)*0.123,top+0.067,z],0.30,
       (j%2 ? -1 : 1)*(Math.PI/2+(j-1)*0.11))
+  }
+}
+
+// On the landward side of the drying nets, lobster pots drain on low runners.
+// The willow arches and inward-pointing cord throat are open from both ends.
+function lobsterPot(mesh: HarborMesh, x: number, z: number, length: number, radius: number, heading: number) {
+  ++mesh.object
+  const c = Math.cos(heading), s = Math.sin(heading)
+  const floor = shoreHeight(x,z) + 0.18
+  const point = (along: number, across: number, up = 0): Point =>
+    [x+c*along-s*across, floor+up, z+s*along+c*across]
+  const arch = (along: number, angle: number, scale = 1): Point =>
+    point(along, radius*scale*Math.cos(angle), radius*(0.14+scale*Math.sin(angle)))
+  for (const offset of [-0.68*radius,0.68*radius]) {
+    mesh.beam('dock oak',point(-length*0.54,offset,-0.034),point(length*0.54,offset,-0.034),0.052,0.068)
+    for (const distance of [-length*0.39,length*0.39]) {
+      const top = point(distance,offset,-0.042)
+      mesh.beam('dock oak',[top[0],shoreHeight(top[0],top[2])-0.025,top[2]],top,0.056,0.057)
+    }
+  }
+  for (let k = -2; k <= 2; k++) {
+    const across = radius*0.40*k
+    mesh.beam('sawn cedar',point(-length/2,across,0.017),point(length/2,across,0.017),radius*0.28,0.034)
+  }
+  for (let rib = 0; rib <= 4; rib++) {
+    const along = length*(rib/4-0.5)
+    mesh.beam('steamed willow',arch(along,0),arch(along,Math.PI),0.028,0.038)
+    for (let j = 0; j < 10; j++) {
+      mesh.beam('steamed willow',arch(along,Math.PI*j/10),arch(along,Math.PI*(j+1)/10),0.027,0.030)
+    }
+  }
+  for (let j = 0; j <= 8; j++) {
+    const angle = Math.PI*j/8
+    mesh.beam('steamed willow',arch(-length/2,angle,1.035),arch(length/2,angle,1.035),0.022,0.026)
+  }
+  // A funnel facing the outer end narrows to a suspended, rope-bound eye.
+  const eye = (angle: number): Point => point(length*0.20, radius*0.36*Math.cos(angle),
+    radius*(0.49+0.29*Math.sin(angle)))
+  for (let j = 0; j < 10; j++) {
+    const a = 2*Math.PI*j/10, b = 2*Math.PI*(j+1)/10
+    const mouth = point(length/2,radius*0.92*Math.cos(a),radius*(0.12+0.89*Math.max(0,Math.sin(a))))
+    mesh.beam('hemp rope',mouth,eye(a),0.015,0.015)
+    mesh.beam('hemp rope',eye(a),eye(b),0.019,0.019)
+  }
+  for (let j = -2; j <= 2; j++) {
+    const across = 0.32*j
+    mesh.beam('steamed willow',point(-length/2,across*radius,0.036),
+      point(-length/2,across*radius,radius*(0.14+Math.sqrt(1-across*across))),0.022,0.026)
   }
 }
 
@@ -222,6 +303,7 @@ function boardwalk(mesh: HarborMesh) {
 
 export function makeCoveFishMarket() {
   const mesh = new HarborMesh()
+  addAuctionHall(mesh,left,span,deck)
   for (let bay = 0; bay < 3; bay++) {
     ++mesh.object
     for (let i = 0; i < 8; i++) {
@@ -240,11 +322,11 @@ export function makeCoveFishMarket() {
   for (let i = 0; i <= 3; i++) {
     const bay = Math.min(i,2), u = i === 3 ? 1 : 0
     for (const v of [0.08,0.78]) {
-      const end = cloth(bay,u,v < 0.5 ? 0 : 1), foot = point(bay,u,v,0)
-      foot[1] = shoreHeight(foot[0],foot[2])-0.055
+      const end = cloth(bay,u,v < 0.5 ? 0 : 1)
+      const foot: Point = [end[0], shoreHeight(end[0],end[2])-0.055, end[2]]
       mesh.beam('dock oak',foot,end,0.073,0.08)
-      const brace = point(bay,u,v,end[1]-0.30)
-      mesh.beam('sawn cedar',brace,point(bay,u,v < 0.5 ? 0.25 : 0.60,end[1]-0.04),0.045,0.054)
+      const brace: Point = [end[0],end[1]-0.30,end[2]]
+      mesh.beam('sawn cedar',brace,cloth(bay,u,v < 0.5 ? 0.23 : 0.73),0.045,0.054)
     }
     mesh.beam('sawn cedar',cloth(bay,u,0),cloth(bay,u,1),0.06,0.065)
   }
@@ -258,13 +340,21 @@ export function makeCoveFishMarket() {
   scale(mesh)
   ++mesh.object
   boardwalk(mesh)
+  lobsterPot(mesh,-2.68,-3.91,0.99,0.31,-0.20)
+  lobsterPot(mesh,-1.42,-3.86,1.09,0.35,0.23)
   const result = mesh.finish()
-  result.materials.set(indigo,{color:[0.17,0.35,0.56],map:linenMap})
-  result.materials.set(ivory,{color:[0.94,0.82,0.60],map:linenMap})
-  result.materials.set(ochre,{color:[0.86,0.43,0.105]})
-  result.materials.set(enamel,{color:[0.15,0.41,0.43]})
-  result.materials.set(mackerel,{color:[0.22,0.38,0.42]})
-  result.materials.set(silver,{color:[0.78,0.83,0.76]})
-  result.materials.set(saltwood,{color:[0.67,0.57,0.42],map:result.materials.get('sawn cedar')!.map})
+  result.materials.set(indigo,{color:[0.17,0.35,0.56],map:linenMap,roughness:0.91})
+  result.materials.set(madder,{color:[0.72,0.20,0.112],map:linenMap,roughness:0.90})
+  result.materials.set(ivory,{color:[0.94,0.82,0.60],map:linenMap,roughness:0.93})
+  result.materials.set(ochre,{color:[0.86,0.43,0.105],roughness:0.57})
+  result.materials.set(enamel,{color:[0.15,0.41,0.43],roughness:0.23})
+  result.materials.set(saltwood,{color:[0.67,0.57,0.42],map:result.materials.get('sawn cedar')!.map,roughness:0.88})
+  result.materials.set('limpet shell',{color:[0.81,0.39,0.26],roughness:0.56})
+  result.materials.set('tidepool nacre',{color:[0.90,0.83,0.73],roughness:0.24})
+  result.materials.set('steamed willow',{color:[0.74,0.49,0.23],map:result.materials.get('sawn cedar')!.map,roughness:0.58})
+  result.materials.set('lens brass',{color:[0.76,0.46,0.18],roughness:0.35,metallic:0.79})
+  result.materials.set('ivory buoy paint',{color:[0.95,0.87,0.67],roughness:0.46})
+  result.materials.set('fish market terracotta',{color:[0.67,0.271,0.133],roughness:0.79})
+  result.materials.set('fish market fired clay',{color:[0.51,0.186,0.092],roughness:0.85})
   return result
 }

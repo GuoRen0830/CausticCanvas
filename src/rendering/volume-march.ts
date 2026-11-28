@@ -4,7 +4,7 @@ import marchShader from './shaders/volume-march.wgsl?raw'
 
 // RGB stores linear scattered radiance. A stores the opaque-surface distance
 // from the near plane for depth-aware upsampling.
-export function createVolumeMarch(device: GPUDevice) {
+export function createVolumeMarch(device: GPUDevice, fullResolution = false) {
   const format: GPUTextureFormat = 'rgba16float'
   const module = device.createShaderModule({ label: 'Room single scattering', code: marchShader })
   const pipeline = device.createRenderPipeline({
@@ -29,11 +29,12 @@ export function createVolumeMarch(device: GPUDevice) {
       bounds: { min: [number, number, number]; max: [number, number, number] },
       aperture: [number, number], receiverZ: number, incidentIrradiance: number, relativeIOR?: number,
       receiverSize: [number, number] = aperture) {
-      const halfWidth = Math.ceil(width / 2), halfHeight = Math.ceil(height / 2)
-      if (!target || target.width !== halfWidth || target.height !== halfHeight) {
+      const marchWidth = fullResolution ? width : Math.ceil(width / 2)
+      const marchHeight = fullResolution ? height : Math.ceil(height / 2)
+      if (!target || target.width !== marchWidth || target.height !== marchHeight) {
         target?.destroy()
         target = device.createTexture({
-          label: 'Integrated fog and surface distance', size: [halfWidth, halfHeight], format,
+          label: 'Integrated fog and surface distance', size: [marchWidth, marchHeight], format,
           usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         })
         outputView = target.createView()
@@ -54,8 +55,8 @@ export function createVolumeMarch(device: GPUDevice) {
       data.set(bounds.max, 20)
       data[23] = incidentIrradiance
       data.set(aperture, 24)
-      data[26] = halfWidth
-      data[27] = halfHeight
+      data[26] = marchWidth
+      data[27] = marchHeight
       // Through a flat entrance the incident ray is axial. At the steepest
       // transmitting exit, tan(max deflection) = sqrt(max(eta, 1/eta)^2 - 1).
       data[28] = relativeIOR === undefined ? -1 : Math.sqrt(Math.max(relativeIOR, 1 / relativeIOR) ** 2 - 1)
@@ -63,7 +64,7 @@ export function createVolumeMarch(device: GPUDevice) {
       data[31] = receiverSize[1] / aperture[1]
       device.queue.writeBuffer(uniform, 0, data)
       const pass = encoder.beginRenderPass({
-        label: 'March light volume at half resolution',
+        label: 'March visible light volume',
         colorAttachments: [{ view: outputView, loadOp: 'clear', clearValue: [0, 0, 0, 60000], storeOp: 'store' }],
       })
       pass.setPipeline(pipeline)

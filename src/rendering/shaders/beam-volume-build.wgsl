@@ -5,22 +5,16 @@ struct VolumeParams {
   cellSize: vec3f, pad2: f32,
   resolution: vec3u, pad3: u32,
 }
-struct Hit { trianglePlusOne: u32, t: f32 }
-struct Triangle {
-  a: vec3f, objectId: u32,
-  b: vec3f, originalId: u32,
-  c: vec3f, pad: u32,
-}
 @group(0) @binding(0) var<uniform> volume: VolumeParams;
 @group(0) @binding(1) var<storage, read> heights: array<f32>;
 @group(0) @binding(2) var<storage, read> offsets: array<vec2f>;
 @group(0) @binding(3) var<storage, read> beams: array<vec4f>;
-@group(0) @binding(4) var<storage, read> hits: array<Hit>;
 @group(0) @binding(5) var<storage, read> triangles: array<Triangle>;
 @group(0) @binding(6) var<storage, read_write> field: array<atomic<u32>>;
 @group(0) @binding(7) var lightVolume: texture_storage_3d<rgba16float, write>;
 @group(0) @binding(8) var<storage, read_write> filteredRows: array<u32>;
 @group(0) @binding(9) var apertureColor: texture_2d<f32>;
+override traceSampleHits: bool = false;
 
 fn vertex(id: u32) -> vec3f {
   let xy = vec2f(vec2u(id % volume.grid.x, id / volume.grid.x)) / vec2f(volume.grid - 1u);
@@ -88,29 +82,19 @@ fn inject(@builtin(global_invocation_id) id: vec3u) {
   let b = vertex(select(i + 1u, i + volume.grid.x + 1u, second));
   let c = vertex(i + volume.grid.x);
   let centroid = (a + b + c) / 3.0;
-  var tint = vec3f(1.0);
-  if (volume.hasColor != 0u) {
-    let texel = apertureTexel(centroid.xy, volume.aperture, textureDimensions(apertureColor));
-    tint = textureLoad(apertureColor, texel, 0).rgb;
-    if (all(tint == vec3f(0))) { return; }
-  }
   let bary = select(vec3f(1.0 - local.x - local.y, local.x, local.y),
                     vec3f(1.0 - local.y, local.x + local.y - 1.0, 1.0 - local.x), second);
   let origin = a * bary.x + b * bary.y + c * bary.z;
+  var tint = vec3f(1.0);
+  if (volume.hasColor != 0u) {
+    let texel = apertureTexel(select(centroid.xy, origin.xy, traceSampleHits),
+      volume.aperture, textureDimensions(apertureColor));
+    tint = textureLoad(apertureColor, texel, 0).rgb;
+    if (all(tint == vec3f(0))) { return; }
+  }
   var end = 1e20;
   if (volume.hasHits != 0u) {
-    let hit = hits[face];
-    if (hit.trianglePlusOne != 0u) {
-      // The forward pass traces from the centroid. Move that hit onto this
-      // sample's parallel ray on the same first-hit plane.
-      let tri = triangles[hit.trianglePlusOne - 1u];
-      let n = cross(tri.b - tri.a, tri.c - tri.a);
-      let den = dot(n, ray.xyz);
-      end = hit.t;
-      if (abs(den) > 1e-6 * length(n)) {
-        end += dot(n, centroid - origin) / den;
-      }
-    }
+    end = volumeHitDistance(origin, ray.xyz, centroid, face);
   }
   let start = (origin - volume.lower) / volume.cellSize;
   let velocity = ray.xyz / volume.cellSize;

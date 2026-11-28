@@ -1,4 +1,5 @@
 import { HarborMesh, quayLevel } from './cove-quayside'
+import { fish } from './cove-catch'
 import { shoreHeight } from './cove-shore'
 
 type Point = [number, number, number]
@@ -126,19 +127,10 @@ function fishCart(mesh: HarborMesh) {
   for (const u of [-0.554,-0.06,0.425]) {
     mesh.beam('dock oak',p(u,0.45,-0.26),p(u,0.45,0.26),0.030,0.13)
   }
-  // Split each fish into dark dorsal and silver lateral surfaces. The tail
-  // and head retain their own silhouette at close range in the exported OBJ.
   for (let row=0; row<2; row++) for (let i=0; i<3; i++) {
-    const u=-0.45+row*0.49+i*0.12, v=(i%2)*0.026-0.022
-    const tail=p(u,0.42,v-0.060), nose=p(u+0.035,0.425,v+0.174)
-    const left=p(u-0.022,0.41,v+0.055), right=p(u+0.067,0.413,v+0.046)
-    const back=p(u+0.019,0.472,v+0.083)
-    mesh.face('aged zinc',[tail,left,back],[0,1,0])
-    mesh.face('aged zinc',[left,nose,back],[0,1,0])
-    mesh.face('zinc flashing',[tail,back,right],[0,1,0])
-    mesh.face('zinc flashing',[right,back,nose],[0,1,0])
-    mesh.face('weathered zinc',[tail,right,nose,left],[0,-1,0])
-    mesh.face('aged zinc',[tail,p(u-0.048,0.405,v-0.141),p(u+0.015,0.418,v-0.127)],[0,1,0])
+    const u = -0.45 + row*0.49 + i*0.14, v = (i-1)*0.016
+    const length = i === 1 ? 0.40 : 0.35
+    fish(mesh,p(u,0.390 + length*0.07,v),length, Math.PI/2 + 0.11*(row-i))
   }
 }
 

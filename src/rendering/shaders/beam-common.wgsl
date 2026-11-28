@@ -8,8 +8,8 @@ struct Frame {
   targetSize: vec2f,
   mode: u32,
   exposure: f32,
-  hasColorFilter: u32,
-  pad: u32,
+  renderFlags: u32,
+  lensCenterZ: f32,
 }
 
 // Fixed logarithmic scale relative to the incident lamp irradiance.
@@ -29,10 +29,22 @@ fn irradianceHeat(value: f32) -> vec4f {
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
+
+fn hasApertureColor() -> bool { return (frame.renderFlags & 1u) != 0u; }
+fn isBaseColorView() -> bool { return (frame.renderFlags & 2u) != 0u; }
+
+fn litBaseColor(color: vec3f, hasMaterials: bool) -> vec3f {
+  // The legacy vertex-color preview uses a warm tint. For comparison use
+  // the source albedo of every mesh, including assets without a material file.
+  if (!hasMaterials && !isBaseColorView()) { return color * vec3f(1.0, 0.78, 0.38); }
+  return color;
+}
 @group(0) @binding(1) var sceneDepth: texture_depth_2d;
 @group(0) @binding(2) var normalAndFloor: texture_2d<f32>;
 @group(0) @binding(3) var albedo: texture_2d<f32>;
 @group(0) @binding(4) var lighting: texture_2d<f32>;
+@group(0) @binding(5) var sceneObject: texture_2d<u32>;
+@group(0) @binding(6) var sceneMaterial: texture_2d<u32>;
 @group(1) @binding(0) var<storage, read> heights: array<f32>;
 @group(1) @binding(1) var<storage, read> beams: array<vec4f>;
 // Per-vertex XY displacement from the uniform grid, in meters.

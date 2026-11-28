@@ -1,7 +1,7 @@
 import type { OpticalConfig, ReceiverPlane } from './contracts'
 
 // Cells per axis. Each cell emits two triangles and shares its boundary vertices.
-const lensCellsPerSide = 1024
+const lensCellsPerSide = 4096
 
 // Startup settings. Reload to apply grid, image, or optical changes.
 export const config = {

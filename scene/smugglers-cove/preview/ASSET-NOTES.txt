@@ -1,4 +1,17 @@
+Source geometry coast_land_rocks_02: 1291146 source triangles reduced to 61270 per copy for the interactive scene.
+Source geometry treasure_chest: 103330 source triangles reduced to 45906 per copy for the interactive scene.
+Source material coast_land_rocks_02: coast_land_rocks_02 / metallic-roughness (coast_land_rocks_02_rough) unavailable.
+Source material coast_land_rocks_02: coast_land_rocks_02 / normal (coast_land_rocks_02_nor_gl) unavailable.
+Source material coast_sand_01: original normal unavailable.
+Source material coast_sand_01: original occlusion unavailable.
+Source material coast_sand_01: original roughness unavailable.
+Source material modular_wooden_pier: modular_wooden_pier_planks / metallic-roughness (modular_wooden_pier_planks_metal-modular_wooden_pier_planks_rough) unavailable.
+Source material modular_wooden_pier: modular_wooden_pier_planks / normal (modular_wooden_pier_planks_nor_gl) unavailable.
+Source material modular_wooden_pier: modular_wooden_pier_poles / metallic-roughness (modular_wooden_pier_poles_rough) unavailable.
+Source material modular_wooden_pier: modular_wooden_pier_poles / normal (modular_wooden_pier_poles_nor_gl) unavailable.
+Source material treasure_chest: treasure_chest / metallic-roughness (treasure_chest_metal-treasure_chest_rough) unavailable.
+Source material treasure_chest: treasure_chest / normal (treasure_chest_nor_gl) unavailable.
 Using the project-authored shoreline color atlas for coastal rocks because the original texture is unavailable.
-Using the project-modeled crate in place of wooden_crate_01.
 Using the project-modeled barrel in place of wooden_barrels_01.
+Using the project-modeled crate in place of wooden_crate_01.
 Using the project-modeled lantern in place of wooden_lantern_01.

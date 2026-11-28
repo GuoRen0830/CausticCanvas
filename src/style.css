@@ -88,6 +88,7 @@ h1 {
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-inline-start: auto;
 }
 
 select,
@@ -97,6 +98,7 @@ button {
 }
 
 #bundled-scene,
+#export-size,
 #beam-view {
   appearance: none;
   min-width: 200px;
@@ -105,6 +107,94 @@ button {
   border-radius: 8px;
   background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2355555a' stroke-width='1.4'/%3E%3C/svg%3E") no-repeat right 12px center;
   cursor: pointer;
+}
+
+#export-image {
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+#export-dialog {
+  position: fixed;
+  inset: 58px 24px auto auto;
+  width: min(300px, calc(100vw - 32px));
+  max-height: calc(100dvh - 80px);
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+
+#export-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.export-field, .export-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.export-field {
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+#export-size {
+  min-width: 0;
+  max-width: 72%;
+  font-variant-numeric: tabular-nums;
+}
+
+#export-error {
+  margin: 12px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+#export-error:empty {
+  display: none;
+}
+
+#export-spinner {
+  width: 16px;
+  height: 16px;
+  margin-right: auto;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+}
+
+@keyframes export-spin {
+  to { transform: rotate(1turn); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #export-spinner { animation: export-spin 0.8s linear infinite; }
+}
+
+.export-actions {
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 16px;
+}
+
+#export-submit {
+  padding: 6px 12px;
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--panel);
+  font: inherit;
+}
+
+#export-submit:hover:not(:disabled) {
+  background: #37373a;
 }
 
 button {
@@ -376,7 +466,8 @@ h3 {
   bottom: 24px;
   display: flex;
   align-items: center;
-  width: 292px;
+  width: max-content;
+  min-width: min(292px, calc(100% - 32px));
   max-width: calc(100% - 32px);
   padding: 3px;
   border: 1px solid var(--line);
@@ -391,36 +482,58 @@ h3 {
   gap: 2px;
 }
 
+#debug-legend {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 7px);
+  width: max-content;
+  max-width: min(345px, calc(100vw - 32px));
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: rgba(26, 26, 28, 0.9);
+  color: #f5f5f6;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: right;
+  white-space: pre-line;
+}
+
 #room-options,
 #debug-control {
   flex: 1;
   min-width: 0;
-  margin-left: 5px;
+  margin: 0 0 0 5px;
+  border: 0;
   border-left: 1px solid var(--line-strong);
 }
 
 #room-options {
   display: flex;
+  gap: 12px;
+  padding: 0 8px 0 10px;
+}
+
+#room-options label {
+  display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
-  padding: 4px 8px 4px 10px;
+  padding-block: 4px;
   color: var(--ink-soft);
   font-size: 13px;
   white-space: nowrap;
   cursor: pointer;
 }
 
-#room-options:hover {
+#room-options label:hover {
   color: var(--ink);
 }
 
-#room-options:has(input:disabled) {
+#room-options:disabled label {
   opacity: 0.45;
   cursor: default;
 }
 
-#light-paths {
+#room-options input {
   appearance: none;
   position: relative;
   flex: none;
@@ -433,7 +546,7 @@ h3 {
   cursor: inherit;
 }
 
-#light-paths::before {
+#room-options input::before {
   content: '';
   position: absolute;
   inset: 2px auto 2px 2px;
@@ -442,23 +555,23 @@ h3 {
   background: var(--ink-soft);
 }
 
-#light-paths:checked {
+#room-options input:checked {
   border-color: var(--ink);
   background: var(--ink);
 }
 
-#light-paths:checked::before {
+#room-options input:checked::before {
   transform: translateX(12px);
   background: var(--panel);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  #light-paths::before { transition: transform 0.15s ease; }
+  #room-options input::before { transition: transform 0.15s ease; }
 }
 
 @media (forced-colors: active) {
-  #light-paths { appearance: auto; }
-  #light-paths::before { content: none; }
+  #room-options input { appearance: auto; }
+  #room-options input::before { content: none; }
 }
 
 #beam-view {
@@ -487,7 +600,7 @@ h3 {
 #footnote {
   position: absolute;
   left: 348px;
-  right: 340px;
+  right: 414px;
   bottom: 28px;
   display: flex;
   flex-wrap: wrap;
@@ -504,6 +617,26 @@ h3 {
 
 #scene-status:empty {
   display: none;
+}
+
+#restore-textures {
+  pointer-events: auto;
+  border: 0;
+  padding: 3px 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+#restore-textures:hover, #restore-textures:focus-visible {
+  color: white;
+}
+
+#restore-textures:disabled {
+  cursor: wait;
 }
 
 /* Kept in the DOM for main.ts, but not shown. */
@@ -535,10 +668,33 @@ h3 {
   display: none;
 }
 
+@media (min-width: 761px) and (max-width: 900px) {
+  #footnote { right: 24px; bottom: 68px; }
+}
+
 @media (max-width: 760px) {
   #topbar {
     flex-wrap: wrap;
+    gap: 8px;
     padding: 14px 16px;
+  }
+
+  .scene-picker {
+    order: 1;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    margin-inline-start: 0;
+  }
+
+  #bundled-scene {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  #export-dialog {
+    inset: 0;
+    margin: auto;
+    max-height: calc(100dvh - 32px);
   }
 
   #design-panel {
@@ -574,4 +730,11 @@ h3 {
   #brush-swatches { gap: 0; }
   .color-tools { gap: 2px; }
   #recolor { padding-inline: 4px; }
+}
+
+@media (max-width: 400px) {
+  #room-options { flex-direction: column; gap: 0; }
+  #room-options label { justify-content: space-between; padding-block: 3px; }
+  #design-panel { bottom: 96px; }
+  #footnote { bottom: 76px; }
 }

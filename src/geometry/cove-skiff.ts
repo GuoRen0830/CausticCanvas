@@ -1,4 +1,4 @@
-import { sceneVertexStride, type BaseColorMaterial, type SceneDraw, type SceneMesh } from '../rendering/scene-mesh'
+import { sceneVertexStride, type SceneMaterial, type SceneDraw, type SceneMesh } from '../rendering/scene-mesh'
 
 type Point = [number, number, number]
 type UV = [number, number]
@@ -12,19 +12,37 @@ function unit(a: Point): Point {
   return [a[0]/d, a[1]/d, a[2]/d]
 }
 
-export function makeCoveSkiff(planks?: BaseColorMaterial) {
-  const materials = new Map<string, BaseColorMaterial>()
-  function material(name: string, color: Point, grain = false) {
-    materials.set(name, { color, map: grain ? planks?.map : undefined })
+export function makeCoveSkiff(planks?: SceneMaterial) {
+  const materials = new Map<string, SceneMaterial>()
+  function material(name: string, color: Point, roughness: number, grain = false) {
+    const finish: SceneMaterial = { color, roughness }
+    if (grain && planks?.map) {
+      // The interior uses the same plank UVs in every channel. Paint and
+      // finish remain local to the skiff, including its dielectric reflectance.
+      Object.assign(finish, { map: planks.map, uvTransform: planks.uvTransform, clamp: planks.clamp,
+        normalMap: planks.normalMap, normalScale: planks.normalScale, normalYSign: planks.normalYSign,
+        normalUVTransform: planks.normalUVTransform, normalClamp: planks.normalClamp,
+        roughnessMap: planks.roughnessMap, roughnessUVTransform: planks.roughnessUVTransform, roughnessClamp: planks.roughnessClamp,
+        metallicRoughnessMap: planks.metallicRoughnessMap, metallicRoughnessUVTransform: planks.metallicRoughnessUVTransform,
+        metallicRoughnessClamp: planks.metallicRoughnessClamp, metallic: 0, sampling: planks.sampling })
+      const refs = planks.recoverableMaps
+      if (refs) finish.recoverableMaps = {
+        ...(refs.map && { map: { ...refs.map, color } }),
+        ...(refs.normalMap && { normalMap: refs.normalMap }),
+        ...(refs.metallicRoughnessMap && { metallicRoughnessMap: { ...refs.metallicRoughnessMap, roughness, metallic: 0 } }),
+      }
+    }
+    materials.set(name, finish)
   }
-  material('deep teal paint', [0.036, 0.154, 0.155])
-  material('faded teal paint', [0.059, 0.207, 0.188])
-  material('plank edges', [0.028, 0.079, 0.071])
-  material('interior oak', planks?.map ? [0.94, 0.68, 0.43] : [0.33, 0.165, 0.074], true)
-  material('interior cedar', planks?.map ? [0.82, 0.55, 0.33] : [0.24, 0.115, 0.054], true)
-  material('varnished trim', [0.39, 0.21, 0.091])
-  material('ash oars', [0.55, 0.35, 0.16])
-  material('cream band', [0.75, 0.65, 0.42])
+  material('deep teal paint', [0.036, 0.154, 0.155], 0.34)
+  material('faded teal paint', [0.059, 0.207, 0.188], 0.53)
+  material('plank edges', [0.028, 0.079, 0.071], 0.75)
+  material('interior oak', planks?.map ? [0.94, 0.68, 0.43] : [0.33, 0.165, 0.074], 0.71, true)
+  material('interior cedar', planks?.map ? [0.82, 0.55, 0.33] : [0.24, 0.115, 0.054], 0.78, true)
+  material('varnished trim', [0.39, 0.21, 0.091], 0.28)
+  material('ash oars', [0.55, 0.35, 0.16], 0.46)
+  material('cream band', [0.75, 0.65, 0.42], 0.42)
+  materials.set('verdigris', { color: [0.32,0.23,0.13], roughness: 0.38, metallic: 0.72 })
   const vertices: number[] = [], uvs: number[] = [], groups = new Map<string, number[]>()
   const up: Point = [0, 1, 0], down: Point = [0, -1, 0]
   const defaultUV: UV[] = [[0,0], [1,0], [1,1], [0,1]]
@@ -90,17 +108,44 @@ export function makeCoveSkiff(planks?: BaseColorMaterial) {
         hull(inside,hi,1,-0.026),hull(inside,hi,-1,-0.026)], [0,0,-direction])
     }
   }
-  // The raised sole keeps the floorboards above the waterline. Each strip
-  // follows the bilge as the hull narrows toward the bow and stern.
-  for (let j = 0; j < 5; j++) for (let i = 1; i < segments-1; i++) {
+  // Fit a continuous sole to the actual faceted hull at its height. The
+  // caulking closes the seams and both ends above the highest water ripples.
+  function sole(t: number, edge: number, backing = false): Point {
+    const y = 0.031 + 0.008*(2*t-1)**2 - (backing ? 0.006 : 0)
+    const keel = hull(t,0,1), rim = hull(t,1,1)
+    const level = (y-keel[1]) / (rim[1]-keel[1]) * bands
+    const row = Math.floor(level), offset = backing ? -0.014 : -0.024
+    const a = hull(t,row/bands,1,offset), b = hull(t,(row+1)/bands,1,offset)
+    return [edge*(a[0]+(b[0]-a[0])*(level-row)), y, keel[2]]
+  }
+  for (let i = 0; i < segments; i++) {
     const t = i/segments, end = (i+1)/segments
-    function sole(u: number, edge: number): Point {
-      const p = hull(u,0.61,1,-0.05)
-      return [p[0]*edge, 0.031 + 0.008*(2*u-1)**2, p[2]]
+    quad('plank edges', [sole(t,-1,true),sole(end,-1,true),sole(end,1,true),sole(t,1,true)], up)
+    for (let j = 0; j < 5; j++) {
+      const left = (j+0.016)*0.4-1, right = (j+0.984)*0.4-1
+      quad(j%2 ? 'interior oak':'interior cedar',
+        [sole(t,left),sole(end,left),sole(end,right),sole(t,right)], up, stripUV(t*length,end*length,j*0.45))
     }
-    const left = (j+0.016)*0.4-1, right = (j+0.984)*0.4-1
-    quad(j%2 ? 'interior oak':'interior cedar',
-      [sole(t,left),sole(end,left),sole(end,right),sole(t,right)], up, stripUV(t*length,end*length,j*0.45))
+  }
+  // Terminate the two painter lines on the necks of actual gunwale fittings.
+  // Keeping their vertex indices makes the endpoints follow the posed hull.
+  const mooringVertices: number[] = []
+  for (const t of [0.05,0.90]) {
+    const [x,y,z] = hull(t,1,1,-0.009), sides = 8
+    const profile = [[0.022,-0.005],[0.015,0.008],[0.015,0.021],[0.023,0.029],[0.023,0.036]]
+    function ring(row: number, i: number): Point {
+      const [radius,height] = profile[row], angle = 2*Math.PI*i/sides
+      return [x+radius*Math.cos(angle), y+height, z+radius*Math.sin(angle)]
+    }
+    for (let j = 0; j < profile.length-1; j++) for (let i = 0; i < sides; i++) {
+      const a = ring(j,i), b = ring(j,i+1)
+      if (j === 2 && i === 0) mooringVertices.push(vertices.length/sceneVertexStride)
+      quad('verdigris', [a,b,ring(j+1,i+1),ring(j+1,i)], [a[0]+b[0]-2*x,0,a[2]+b[2]-2*z])
+    }
+    const last = profile.length-1
+    for (let i = 0; i < sides; i+=2) {
+      quad('verdigris', [[x,y+profile[last][1],z],ring(last,i),ring(last,i+1),ring(last,i+2)], up)
+    }
   }
   // Visible frames curve up each side between the planks and the thwarts.
   for (const t of [0.10,0.24,0.38,0.52,0.66,0.80,0.91]) for (const side of [-1,1]) {
@@ -154,5 +199,5 @@ export function makeCoveSkiff(planks?: BaseColorMaterial) {
   }
   const mesh: SceneMesh = { vertices: new Float32Array(vertices), uvs: new Float32Array(uvs),
     indices: new Uint32Array(indices), draws }
-  return { mesh, materials, warnings: new Set<string>() }
+  return { mesh, materials, warnings: new Set<string>(), mooringVertices }
 }

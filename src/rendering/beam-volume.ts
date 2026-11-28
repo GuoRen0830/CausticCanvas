@@ -1,11 +1,16 @@
 import type { ForwardResult } from '../contracts'
 import apertureUV from './shaders/aperture-uv.wgsl?raw'
+import hitTypes from './shaders/scene-hit.wgsl?raw'
+import bvhQuery from './shaders/bvh-query.wgsl?raw'
+import cachedHitPlane from './shaders/volume-hit-plane.wgsl?raw'
+import exportVolumeHit from './shaders/export-volume-hit.wgsl?raw'
 import volumeShader from './shaders/beam-volume-build.wgsl?raw'
 
 const resolution = [144, 144, 96] as const
 // Stable lens-space strata. Leave headroom for the optimizer during training,
 // then oversample the last evaluation to resolve the narrowest folds.
 const samplesPerSide = 192
+const exportSamplesPerSide = 240
 const trainingSamplesPerSide = 160
 type Point = [number, number, number]
 
@@ -20,7 +25,7 @@ export function beamVolumeBounds(result: ForwardResult, receiverZ: number): { mi
   return { min: [-x, -y, 0], max: [x, y, receiverZ] }
 }
 
-export function createBeamVolume(device: GPUDevice) {
+export function createBeamVolume(device: GPUDevice, traceSampleHits = false) {
   const [width, height, depth] = resolution
   const texture = device.createTexture({
     label: 'Refracted light in the medium', dimension: '3d', size: [width, height, depth],
@@ -49,9 +54,12 @@ export function createBeamVolume(device: GPUDevice) {
   })
   // Plane-only forward models omit BVH records. Their rays reach the volume boundary.
   const emptyHits = device.createBuffer({ label: 'Unused volume hit data', size: 48, usage: GPUBufferUsage.STORAGE })
-  const module = device.createShaderModule({ label: 'Refracted beam volume', code: apertureUV + '\n' + volumeShader })
+  const hitDistance = traceSampleHits ? bvhQuery + '\n' + exportVolumeHit : cachedHitPlane
+  const module = device.createShaderModule({ label: 'Refracted beam volume',
+    code: [apertureUV, hitTypes, hitDistance, volumeShader].join('\n') })
   const inject = device.createComputePipeline({
-    label: 'Deposit refracted beams', layout: 'auto', compute: { module, entryPoint: 'inject' },
+    label: 'Deposit refracted beams', layout: 'auto', compute: { module, entryPoint: 'inject',
+      constants: { traceSampleHits: Number(traceSampleHits) } },
   })
   const filterRows = device.createComputePipeline({
     label: 'Filter refracted beam rows', layout: 'auto', compute: { module, entryPoint: 'filterRows' },
@@ -83,9 +91,9 @@ export function createBeamVolume(device: GPUDevice) {
     update(encoder: GPUCommandEncoder, result: ForwardResult, offsets: GPUBuffer, receiverZ: number,
       training = false, colorFilter?: GPUTextureView) {
       const { lens, buffer: rays } = result.beams
-      const hitBuffer = result.firstHits?.buffer ?? emptyHits
+      const hitBuffer = traceSampleHits ? result.firstHits?.nodes : result.firstHits?.buffer
       const triangles = result.firstHits?.triangles ?? emptyHits
-      const buffers = [params, lens.heightBuffer, offsets, rays, hitBuffer, triangles, accumulator]
+      const buffers = [params, lens.heightBuffer, offsets, rays, hitBuffer ?? emptyHits, triangles, accumulator]
       const filter = colorFilter ?? whiteView
       if (boundFilter !== filter || buffers.some((buffer, index) => buffer !== boundBuffers[index])) {
         boundFilter = filter
@@ -100,12 +108,12 @@ export function createBeamVolume(device: GPUDevice) {
       // Fixed strata give a stationary image when the camera or the lens moves.
       // Keep enough samples on the narrow axis for thin, textured footprints.
       const aspect = Math.min(2, Math.max(0.5, Math.sqrt(lens.sizeX / lens.sizeY)))
-      const strata = training ? trainingSamplesPerSide : samplesPerSide
+      const strata = traceSampleHits ? exportSamplesPerSide : training ? trainingSamplesPerSide : samplesPerSide
       const nx = Math.round(strata * aspect), ny = Math.round(strata / aspect)
       const { min, max } = beamVolumeBounds(result, receiverZ)
       words.set([lens.columns, lens.rows, nx, ny], 0)
       floats.set([lens.sizeX, lens.sizeY], 4)
-      words[6] = result.firstHits ? 1 : 0
+      words[6] = Number(!!hitBuffer)
       words[7] = Number(!!colorFilter)
       floats.set(min, 8)
       floats.set(max.map((upper, axis) => (upper - min[axis]) / resolution[axis]), 12)

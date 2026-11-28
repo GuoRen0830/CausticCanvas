@@ -119,7 +119,7 @@ export interface ForwardResult {
   readonly receiver: Readonly<ReceiverPlane>
 
   // Optional BVH first hits for this exact mesh and beam evaluation.
-  readonly firstHits?: { readonly mesh: object; readonly buffer: GPUBuffer; readonly triangles: GPUBuffer }
+  readonly firstHits?: { readonly mesh: object; readonly buffer: GPUBuffer; readonly triangles: GPUBuffer; readonly nodes?: GPUBuffer }
 
   // Light-view scene irradiance, or unobstructed plane irradiance in plane mode, generated from these beams, at the receiver resolution.
   // Each call replaces prior values; no accumulation across evaluations.

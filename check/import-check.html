@@ -16,6 +16,12 @@
     checkUniformIllumination(log)
     const device = await (await navigator.gpu.requestAdapter()).requestDevice()
     try {
+      if (new URLSearchParams(location.search).has('export')) {
+        const { checkRoomExport } = await import('./room-export-check.ts')
+        await checkRoomExport(device, log)
+        const { checkExportLightTransport } = await import('./export-light-transport-check.ts')
+        await checkExportLightTransport(device, log)
+      }
       await checkBaseColor(device, log)
       await checkColorLight(device, log)
       await checkPresentation(device, log)

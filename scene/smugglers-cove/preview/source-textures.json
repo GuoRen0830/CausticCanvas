@@ -1,0 +1,448 @@
+{
+  "version": 1,
+  "materials": {
+    "material-0": {
+      "map": {
+        "upgrade": true,
+        "color": [
+          1,
+          0.98,
+          0.94
+        ],
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_diff_2k.jpg",
+        "bytes": 3552676,
+        "md5": "bde59bb3bcdd8d4e9d6fcadc19f038fa"
+      },
+      "normalMap": {
+        "normalScale": 1,
+        "normalYSign": 1,
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_nor_gl_2k.jpg",
+        "bytes": 4630126,
+        "md5": "2a9d793676562b38b5760b9147aa40ea"
+      },
+      "occlusionMap": {
+        "occlusionStrength": 1,
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_ao_2k.jpg",
+        "bytes": 2814916,
+        "md5": "1d269729a18c1f8e993ae9d2c0f22190"
+      },
+      "roughnessMap": {
+        "roughness": 1,
+        "metallic": 0,
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_rough_2k.jpg",
+        "bytes": 1389332,
+        "md5": "66e3bcd9f7158cd8919487afb51eabf2"
+      }
+    },
+    "material-2": {
+      "map": {
+        "upgrade": true,
+        "color": [
+          0.17,
+          0.16,
+          0.12
+        ],
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_diff_2k.jpg",
+        "bytes": 3552676,
+        "md5": "bde59bb3bcdd8d4e9d6fcadc19f038fa"
+      },
+      "normalMap": {
+        "normalScale": 1,
+        "normalYSign": 1,
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_nor_gl_2k.jpg",
+        "bytes": 4630126,
+        "md5": "2a9d793676562b38b5760b9147aa40ea"
+      },
+      "occlusionMap": {
+        "occlusionStrength": 1,
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_ao_2k.jpg",
+        "bytes": 2814916,
+        "md5": "1d269729a18c1f8e993ae9d2c0f22190"
+      },
+      "roughnessMap": {
+        "roughness": 0.94,
+        "metallic": 0,
+        "url": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/2k/coast_sand_01/coast_sand_01_rough_2k.jpg",
+        "bytes": 1389332,
+        "md5": "66e3bcd9f7158cd8919487afb51eabf2"
+      }
+    },
+    "material-6": {
+      "map": {
+        "color": [
+          1,
+          1,
+          1
+        ],
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/coast_land_rocks_02/coast_land_rocks_02_diff_2k.jpg",
+        "bytes": 3236496,
+        "md5": "1ea7931f92ae9cd9db4c5f886270a8d9"
+      },
+      "normalMap": {
+        "normalScale": 1,
+        "normalYSign": -1,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/coast_land_rocks_02/coast_land_rocks_02_nor_gl_2k.jpg",
+        "bytes": 4651001,
+        "md5": "695217c8729de25609c71433c4228c24"
+      },
+      "metallicRoughnessMap": {
+        "roughness": 1,
+        "metallic": 0,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/coast_land_rocks_02/coast_land_rocks_02_arm_2k.jpg",
+        "bytes": 2946981,
+        "md5": "62722e6fa0d54f7e50a8d702fcf3771c"
+      }
+    },
+    "material-137": {
+      "map": {
+        "upgrade": true,
+        "color": [
+          1,
+          1,
+          1
+        ],
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_planks_diff_2k.jpg",
+        "bytes": 2886320,
+        "md5": "636da8df2fc13ca85e3f96fe2fa0d527"
+      },
+      "normalMap": {
+        "normalScale": 1,
+        "normalYSign": -1,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_planks_nor_gl_2k.jpg",
+        "bytes": 4272628,
+        "md5": "21a821d3a0d6f484c19c199853a1bbef"
+      },
+      "metallicRoughnessMap": {
+        "roughness": 1,
+        "metallic": 1,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_planks_arm_2k.jpg",
+        "bytes": 2718602,
+        "md5": "7f685bf8bd9cbb8e83e8546d60776873"
+      }
+    },
+    "material-138": {
+      "map": {
+        "upgrade": true,
+        "color": [
+          1,
+          1,
+          1
+        ],
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_poles_diff_2k.jpg",
+        "bytes": 3319026,
+        "md5": "1a73fa4ad5d6bf82931a4c3b387b76f4"
+      },
+      "normalMap": {
+        "normalScale": 1,
+        "normalYSign": -1,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_poles_nor_gl_2k.jpg",
+        "bytes": 4033427,
+        "md5": "9cdef0bc0587c64f5ba52432a986229e"
+      },
+      "metallicRoughnessMap": {
+        "roughness": 1,
+        "metallic": 0,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_poles_arm_2k.jpg",
+        "bytes": 3156282,
+        "md5": "eedd38da6254c68aff47d93099b4ae8b"
+      }
+    },
+    "material-142": {
+      "map": {
+        "upgrade": true,
+        "color": [
+          0.82,
+          0.55,
+          0.33
+        ],
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_planks_diff_2k.jpg",
+        "bytes": 2886320,
+        "md5": "636da8df2fc13ca85e3f96fe2fa0d527"
+      },
+      "normalMap": {
+        "normalScale": 1,
+        "normalYSign": -1,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_planks_nor_gl_2k.jpg",
+        "bytes": 4272628,
+        "md5": "21a821d3a0d6f484c19c199853a1bbef"
+      },
+      "metallicRoughnessMap": {
+        "roughness": 0.78,
+        "metallic": 0,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_planks_arm_2k.jpg",
+        "bytes": 2718602,
+        "md5": "7f685bf8bd9cbb8e83e8546d60776873"
+      }
+    },
+    "material-144": {
+      "map": {
+        "upgrade": true,
+        "color": [
+          0.94,
+          0.68,
+          0.43
+        ],
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_planks_diff_2k.jpg",
+        "bytes": 2886320,
+        "md5": "636da8df2fc13ca85e3f96fe2fa0d527"
+      },
+      "normalMap": {
+        "normalScale": 1,
+        "normalYSign": -1,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_planks_nor_gl_2k.jpg",
+        "bytes": 4272628,
+        "md5": "21a821d3a0d6f484c19c199853a1bbef"
+      },
+      "metallicRoughnessMap": {
+        "roughness": 0.71,
+        "metallic": 0,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/modular_wooden_pier/modular_wooden_pier_planks_arm_2k.jpg",
+        "bytes": 2718602,
+        "md5": "7f685bf8bd9cbb8e83e8546d60776873"
+      }
+    },
+    "material-150": {
+      "map": {
+        "upgrade": true,
+        "color": [
+          1,
+          1,
+          1
+        ],
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/treasure_chest/treasure_chest_diff_2k.jpg",
+        "bytes": 2999401,
+        "md5": "b746ad6fb5bd24c8b7027abba607deb7"
+      },
+      "normalMap": {
+        "normalScale": 1,
+        "normalYSign": -1,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/treasure_chest/treasure_chest_nor_gl_2k.jpg",
+        "bytes": 3805947,
+        "md5": "39086131c399a6b37b081fad215c099e"
+      },
+      "metallicRoughnessMap": {
+        "roughness": 1,
+        "metallic": 1,
+        "clamp": false,
+        "sampling": {
+          "uvSet": 0,
+          "rotation": 0,
+          "sampler": {
+            "addressModeU": "repeat",
+            "addressModeV": "repeat",
+            "magFilter": "linear",
+            "minFilter": "linear",
+            "mipmapFilter": "linear"
+          }
+        },
+        "url": "https://dl.polyhaven.org/file/ph-assets/Models/jpg/2k/treasure_chest/treasure_chest_arm_2k.jpg",
+        "bytes": 3384411,
+        "md5": "f4721e93c7e8e261c14df4364083b81d"
+      }
+    }
+  }
+}

@@ -1,5 +1,6 @@
-import { shoreHeight } from './cove-shore'
-import { sceneVertexStride, type BaseColorMaterial, type SceneDraw, type SceneMesh } from '../rendering/scene-mesh'
+import { shoreHeight, tideUV } from './cove-shore'
+import { addIntertidalLife } from './cove-intertidal-life'
+import { sceneVertexStride, type SceneMaterial, type SceneDraw, type SceneMesh } from '../rendering/scene-mesh'
 
 type Plan = [number, number]
 type Point = [number, number, number]
@@ -61,15 +62,23 @@ function relief(x: number, z: number) {
 
 // Both the lens solver and the camera get the same rock mesh and the same
 // waterline, clipped to the rock faces which actually lie below each pool.
-export function makeCoveTidePools(stone: BaseColorMaterial, water: BaseColorMaterial) {
-  const materials = new Map<string, BaseColorMaterial>([
-    ['bedrock', { color: [0.295,0.275,0.217], map: stone.map }],
-    ['wet strata', { color: [0.148,0.164,0.138], map: stone.map }],
-    ['algal rock', { color: [0.142,0.175,0.102], map: stone.map }],
-    ['rock pool', { color: [0.78,0.90,0.75], map: water.map, clamp: true }],
-    ['limpet lip', { color: [0.255,0.225,0.166] }],
-    ['limpet shell', { color: [0.62,0.56,0.42] }],
-    ['limpet rib', { color: [0.45,0.42,0.32] }],
+export function makeCoveTidePools(stone: SceneMaterial, water: SceneMaterial) {
+  const materials = new Map<string, SceneMaterial>([
+    ['bedrock', { ...stone, color: [0.295,0.275,0.217], roughness: 0.90 }],
+    ['wet strata', { ...stone, color: [0.148,0.164,0.138], roughness: 0.34 }],
+    ['algal rock', { ...stone, color: [0.142,0.175,0.102], roughness: 0.46 }],
+    ['rock pool', { color: [0.78,0.90,0.75], map: water.map, clamp: true, roughness: 0.18 }],
+    ['limpet lip', { color: [0.255,0.225,0.166], roughness: 0.72 }],
+    ['limpet shell', { color: [0.62,0.56,0.42], roughness: 0.37 }],
+    ['limpet rib', { color: [0.45,0.42,0.32], roughness: 0.51 }],
+    ['tidepool mussel', { color: [0.037,0.063,0.099], roughness: 0.27 }],
+    ['tidepool nacre', { color: [0.35,0.43,0.49], roughness: 0.31 }],
+    ['olive kelp', { color: [0.164,0.191,0.047], roughness: 0.32, doubleSided: true }],
+    ['amber kelp', { color: [0.304,0.164,0.042], roughness: 0.31, doubleSided: true }],
+    ['ochre sea star', { color: [0.61,0.162,0.049], roughness: 0.49 }],
+    ['sea star ossicles', { color: [0.84,0.45,0.21], roughness: 0.58 }],
+    ['acorn barnacle', { color: [0.54,0.47,0.37], roughness: 0.61 }],
+    ['barnacle aperture', { color: [0.135,0.105,0.084], roughness: 0.37 }],
   ])
   const vertices: number[] = [], uvs: number[] = [], batches = new Map<string, number[]>()
   function vertex(p: Point, n: Point, uv: Plan, object: number) {
@@ -99,10 +108,7 @@ export function makeCoveTidePools(stone: BaseColorMaterial, water: BaseColorMate
     }
     if (clipped.length < 3) return
     // The lagoon image remains continuous over each pool in the OBJ bake.
-    const ids = clipped.map(p => {
-      const inward = saturate(3.8*signedDistance(p[0],p[2],pool.outline))
-      return vertex(p,[0,1,0],[0.30 + 0.22*(p[0]+5.3), 0.96-0.62*inward],object)
-    })
+    const ids = clipped.map(p => vertex(p,[0,1,0],tideUV(p[0],p[2]),object))
     for (let j = 2; j < ids.length; j++) tri('rock pool',ids[0],ids[j-1],ids[j])
   }
   const cols = 52, rows = 44, grid: Sample[] = []
@@ -144,8 +150,8 @@ export function makeCoveTidePools(stone: BaseColorMaterial, water: BaseColorMate
       const dx=radial*(Math.cos(u)*Math.cos(angle)-0.75*Math.sin(u)*Math.sin(angle))
       const dz=radial*(Math.cos(u)*Math.sin(angle)+0.75*Math.sin(u)*Math.cos(angle))
       const h=tangent(dx,dz), n: Point = [0.65*dx/r,1,0.65*dz/r]
-      rim.push(vertex([x+dx,h+0.007,z+dz],n,[0,0],object))
-      lips.push(vertex([x+1.1*dx,h-0.014,z+1.1*dz],n,[0,0],object))
+      rim.push(vertex([x+dx,h+0.007,z+dz],n,[0.5+0.43*Math.cos(u),0.5+0.43*Math.sin(u)],object))
+      lips.push(vertex([x+1.1*dx,h-0.014,z+1.1*dz],n,[0.5+0.49*Math.cos(u),0.5+0.49*Math.sin(u)],object))
     }
     for (let k=0;k<rim.length;k++) {
       const next=(k+1)%rim.length
@@ -153,9 +159,102 @@ export function makeCoveTidePools(stone: BaseColorMaterial, water: BaseColorMate
       tri('limpet lip',rim[k],rim[next],lips[k]); tri('limpet lip',lips[k],rim[next],lips[next])
     }
   }
+  // Drape the wrack and shell margins on the triangles actually exported.
+  // The analytic relief has sharper fissures than this sampled shelf.
+  function shelfHeight(x: number, z: number) {
+    const u = Math.max(0, Math.min(cols, (x+5.91)*cols/3.10))
+    const v = Math.max(0, Math.min(rows, (z+0.02)*rows/2.77))
+    const i = Math.min(Math.floor(u),cols-1), j = Math.min(Math.floor(v),rows-1)
+    const a = j*(cols+1)+i, b = a+cols+1, s = u-i, t = v-j
+    const y0 = grid[a].position[1], y1 = grid[a+1].position[1]
+    const y2 = grid[b].position[1], y3 = grid[b+1].position[1]
+    return s+t <= 1 ? y0+s*(y1-y0)+t*(y2-y0) : y3+(1-s)*(y2-y3)+(1-t)*(y1-y3)
+  }
+  let object = 5 + colonies.length
+  // Blue mussels gather in creases on several sides of the pools. The wider
+  // end of a valve has a pale worn edge; most of its surface stays inky.
+  const musselBeds = [[-5.38,1.00,0.8],[-4.62,1.47,-0.36],[-3.48,1.63,1.87],[-4.34,2.24,-0.76]]
+  for (const [bed,[ox,oz,heading]] of musselBeds.entries()) {
+    for (let i=0;i<8;i++,object++) {
+      const radius = 0.081*Math.sqrt(i), spiral = heading + 2.4*i
+      const x = ox + radius*Math.cos(spiral), z = oz + 0.62*radius*Math.sin(spiral)
+      const angle = heading + 0.57*Math.sin(1.8*i+bed)
+      const cos = Math.cos(angle), sin = Math.sin(angle)
+      const length = 0.052 + 0.013*Math.cos(2.3*i-bed)
+      const ring: number[] = [], shoulder: number[] = []
+      const peak = vertex([x+0.15*length*cos,shelfHeight(x,z)+0.45*length,z+0.15*length*sin],
+        [0,1,0],[0.56,0.5],object)
+      for (let j=0;j<10;j++) {
+        const phi = j*Math.PI/5, c = Math.cos(phi), s = Math.sin(phi)
+        const dx = length*(c*cos-s*(0.48+0.14*c)*sin)
+        const dz = length*(c*sin+s*(0.48+0.14*c)*cos)
+        const n: Point = [0.62*c*cos-s*sin,1,0.62*c*sin+s*cos]
+        ring.push(vertex([x+dx,shelfHeight(x+dx,z+dz)-0.003,z+dz],n,[0.5+0.49*c,0.5+0.49*s],object))
+        const sx = x+0.88*dx, sz = z+0.88*dz
+        shoulder.push(vertex([sx,shelfHeight(sx,sz)+0.16*length,sz],n,[0.5+0.42*c,0.5+0.42*s],object))
+      }
+      for (let j=0;j<ring.length;j++) {
+        const k = (j+1)%ring.length
+        const lip = (j === 0 || j === 9) && i%3 !== 2 ? 'tidepool nacre' : 'tidepool mussel'
+        tri(lip,ring[j],shoulder[j],ring[k])
+        tri(lip,ring[k],shoulder[j],shoulder[k])
+        tri('tidepool mussel',shoulder[j],peak,shoulder[k])
+      }
+    }
+  }
+  // Blades fan out from a common holdfast. A raised midrib, curled edges and
+  // a lifted bow give grazing light a different highlight on each blade.
+  function frond(x: number,z: number,angle: number,length: number,halfWidth: number,phase: number,finish: string) {
+    const count = 11, sections: Point[][] = [], strip: number[][] = []
+    const cos = Math.cos(angle), sin = Math.sin(angle)
+    const bend = (t: number) => length*(0.14*Math.sin(Math.PI*t+0.4*phase) -
+      0.14*Math.sin(0.4*phase) + 0.052*Math.sin(2*Math.PI*t))
+    for (let i=0;i<=count;i++) {
+      const t = i/count, arch = Math.sin(Math.PI*t)
+      const spread = halfWidth*(0.035 + 0.965*arch**0.77)*(0.92+0.08*Math.sin(16*t+phase))
+      const side = bend(t), tangent = (bend(t+0.001)-bend(t-0.001))/(0.002*length)
+      const norm = Math.hypot(1,tangent), nx = (-sin-tangent*cos)/norm, nz = (cos-tangent*sin)/norm
+      const centerX = x+t*length*cos-side*sin, centerZ = z+t*length*sin+side*cos
+      const across: Point[] = []
+      for (const lane of [-1,0,1]) {
+        const px = centerX+nx*spread*lane, pz = centerZ+nz*spread*lane
+        let floor = shelfHeight(px,pz)
+        for (const pool of pools) if (signedDistance(px,pz,pool.outline)>0) floor = Math.max(floor,pool.level)
+        const curl = 0.16*halfWidth*lane*Math.sin(11*t+phase) + (lane === 0 ? 0.17*halfWidth : 0)
+        across.push([px,floor+0.002+arch*(0.037+curl),pz])
+      }
+      sections.push(across)
+    }
+    for (let i=0;i<=count;i++) {
+      const lo = sections[Math.max(i-1,0)], hi = sections[Math.min(i+1,count)], row = sections[i]
+      const ids: number[] = []
+      for (let lane=0;lane<3;lane++) {
+        const l = row[Math.max(lane-1,0)], r = row[Math.min(lane+1,2)]
+        const ax = r[0]-l[0], ay = r[1]-l[1], az = r[2]-l[2]
+        const bx = hi[lane][0]-lo[lane][0], by = hi[lane][1]-lo[lane][1], bz = hi[lane][2]-lo[lane][2]
+        const n: Point = [ay*bz-az*by,az*bx-ax*bz,ax*by-ay*bx]
+        ids.push(vertex(row[lane],n,[lane/2,i/count],object))
+      }
+      strip.push(ids)
+      if (i > 0) for (let lane=0;lane<2;lane++) {
+        tri(finish,strip[i-1][lane],strip[i-1][lane+1],ids[lane])
+        tri(finish,ids[lane],strip[i-1][lane+1],ids[lane+1])
+      }
+    }
+    object++
+  }
+  for (const [fan,[x,z,angle,scale]] of [[-4.86,1.63,-0.26,1],[-3.65,2.22,3.15,0.80],[-5.17,0.60,0.42,0.65]].entries()) {
+    for (let i=0;i<4;i++) {
+      const phase = i*1.8+fan
+      frond(x,z,angle+0.39*(i-1.5),scale*(0.54+0.17*Math.sin(phase)),scale*(0.042+0.011*Math.cos(phase)),
+        phase,i === 1 || (fan === 2 && i === 3) ? 'amber kelp' : 'olive kelp')
+    }
+  }
+  addIntertidalLife({ height:shelfHeight, vertex, tri },object)
   const draws: SceneDraw[] = [], indices: number[] = []
   for (const [material,batch] of batches) {
-    draws.push({material, firstIndex:indices.length,indexCount:batch.length,hasUV:true})
+    draws.push({material, firstIndex:indices.length,indexCount:batch.length,hasUV:true,
+      doubleSided: materials.get(material)?.doubleSided})
     for (const id of batch) indices.push(id)
   }
   const mesh: SceneMesh = { vertices:new Float32Array(vertices), uvs:new Float32Array(uvs), indices:new Uint32Array(indices), draws }

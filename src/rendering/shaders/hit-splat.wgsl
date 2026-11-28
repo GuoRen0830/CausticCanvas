@@ -1,5 +1,4 @@
 @group(2) @binding(0) var<storage, read> triangles: array<Triangle>;
-@group(0) @binding(5) var sceneObject: texture_2d<u32>;
 @group(2) @binding(3) var<storage, read> cachedHits: array<Hit>;
 
 struct Splat {
@@ -21,8 +20,8 @@ fn splatVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u3
   let hit = cachedHits[face];
   if (hit.trianglePlusOne == 0u) { return out; }
   let tri = triangles[hit.trianglePlusOne - 1u];
-  let n = normalize(cross(tri.b - tri.a, tri.c - tri.a));
   let ray = beams[face];
+  let n = receivingNormal(tri, ray.xyz);
   let incidence = -dot(n, ray.xyz);
   if (!(incidence > 1e-7)) { return out; }
   let ids = sourceIds(face);
@@ -32,7 +31,7 @@ fn splatVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u3
   let perpArea = 0.5 * abs(dot(cross(source[1]-source[0], source[2]-source[0]), ray.xyz));
   if (!(perpArea > 0.0)) { return out; }
   var transmission = vec3f(1);
-  if (frame.hasColorFilter != 0u && frame.mode == 0u) {
+  if (hasApertureColor() && frame.mode == 0u) {
     let texel = apertureTexel(centroid.xy, frame.aperture, textureDimensions(apertureFilter));
     transmission = textureLoad(apertureFilter, texel, 0).rgb;
   }

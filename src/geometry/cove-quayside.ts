@@ -1,6 +1,8 @@
 import limestone from '../../scene/smugglers-cove/quay-limestone.png?inline'
+import stoneRoughness from '../../scene/smugglers-cove/quay-stone-roughness.png?inline'
 import timber from '../../scene/smugglers-cove/quay-timber.png?inline'
-import { sceneVertexStride, type BaseColorMaterial, type SceneMesh } from '../rendering/scene-mesh'
+import sailcloth from '../../scene/smugglers-cove/lug-sailcloth.png?inline'
+import { sceneVertexStride, type SceneMaterial, type SceneMesh } from '../rendering/scene-mesh'
 import { shoreHeight } from './cove-shore'
 
 type Point = [number, number, number]
@@ -16,36 +18,88 @@ export const quayLevel = 0.80, quayFront = -1.47
 const stairDepth = 0.26, stairCount = 4
 export const pierApproach = { x: 2.57, z: quayFront + stairCount * stairDepth }
 
+// Planar dressed faces share one UV frame across the entire cap. A narrow
+// sloping shoulder and four differently clipped corners take real highlights.
+export function dressedStone(mesh: HarborMesh, material: string, corners: Point[], thickness: number, bevel: number) {
+  const [a,b,c,d] = corners
+  const span = Math.hypot(b[0]-a[0],b[2]-a[2]), depth = Math.hypot(d[0]-a[0],d[2]-a[2])
+  const seed = a[0]*17.7 + a[2]*39.3
+  const clips = corners.map((_,i) => bevel*(1.0+2.6*Math.sin(seed+1.9*i)**6))
+  function ring(inset: number, drop: number): Point[] {
+    const lo = inset/span, near = inset/depth, hi = 1-lo, far = 1-near
+    const ux = clips.map(size => Math.min(0.14, size/span)), vz = clips.map(size => Math.min(0.16, size/depth))
+    const plan = [[lo+ux[0],near], [hi-ux[1],near], [hi,near+vz[1]], [hi,far-vz[2]],
+      [hi-ux[2],far], [lo+ux[3],far], [lo,far-vz[3]], [lo,near+vz[0]]]
+    return plan.map(([u,v]): Point => [0,1,2].map(k =>
+      (1-v)*((1-u)*a[k]+u*b[k])+v*((1-u)*d[k]+u*c[k]) - (k===1 ? drop : 0)) as Point)
+  }
+  const top = ring(bevel,0), shoulder = ring(0,bevel*0.8), bottom = ring(0,thickness)
+  mesh.face(material,top,[0,1,0])
+  mesh.face(material,bottom,[0,-1,0])
+  const center = corners.reduce((sum,p) => [sum[0]+0.25*p[0],0,sum[2]+0.25*p[2]] as Point,[0,0,0] as Point)
+  for (let i=0; i<top.length; i++) {
+    const j=(i+1)%top.length
+    const out: Point = [shoulder[i][0]+shoulder[j][0]-2*center[0],0,shoulder[i][2]+shoulder[j][2]-2*center[2]]
+    mesh.face(material,[bottom[i],bottom[j],shoulder[j],shoulder[i]],out)
+    mesh.face(material,[shoulder[i],shoulder[j],top[j],top[i]],[0,1,0])
+  }
+}
+
+// Flush iron cramps tie adjacent coping stones together. Their splayed ends
+// seat in the stone and only a slim iron bridge is exposed over the joint.
+export function stoneCramp(mesh: HarborMesh, a: Point, b: Point) {
+  const dx=b[0]-a[0], dz=b[2]-a[2], length=Math.hypot(dx,dz)
+  const edge=(t: number, across: number, below=0): Point =>
+    [a[0]+t*dx-across*dz/length,a[1]+t*(b[1]-a[1])-below,a[2]+t*dz+across*dx/length]
+  const profile = [[0,0.027],[0.16,0.027],[0.26,0.014],[0.74,0.014],[0.84,0.027],[1,0.027]]
+  for (let i=1; i<profile.length; i++) {
+    const [t0,w0]=profile[i-1], [t1,w1]=profile[i]
+    mesh.face('wrought iron',[edge(t0,-w0),edge(t1,-w1),edge(t1,w1),edge(t0,w0)],[0,1,0])
+    mesh.face('wrought iron',[edge(t0,-w0,0.014),edge(t1,-w1,0.014),edge(t1,w1,0.014),edge(t0,w0,0.014)],[0,-1,0])
+    for (const s of [-1,1]) mesh.face('wrought iron',
+      [edge(t0,s*w0),edge(t1,s*w1),edge(t1,s*w1,0.014),edge(t0,s*w0,0.014)],[-s*dz,0,s*dx])
+  }
+  for (const t of [0,1]) mesh.face('wrought iron',
+    [edge(t,-0.027),edge(t,0.027),edge(t,0.027,0.014),edge(t,-0.027,0.014)],[(2*t-1)*dx,0,(2*t-1)*dz])
+}
+
 export function makeQuayside(deckY: number) {
   const mesh = new HarborMesh()
   const left = 0.39, right = 5.84, back = -3.87
   const cx = (left+right)/2, cz = (back+quayFront)/2, wallTop = quayLevel - 0.13, foundation = -0.16
+  function flag(mat: string, x0: number, x1: number, z0: number, z1: number, top: number, thickness: number, wear: number) {
+    dressedStone(mesh,mat,[[x0,top,z0],[x1,top,z0],[x1,top,z1],[x0,top,z1]],thickness,wear)
+  }
   mesh.box('lime mortar', cx, (wallTop+foundation)/2, cz, right-left-0.035, wallTop-foundation, quayFront-back-0.025)
   const stones = ['sandstone', 'weathered limestone', 'warm freestone', 'weathered limestone']
   // An unbroken core sits behind the mortar joints where the beach falls away.
   for (let row = 0; row < 4; row++) {
     const h = (wallTop-foundation)/4
-    for (const edge of ['front','left','right']) {
-      const front = edge === 'front', start = front ? left : back, end = front ? right : quayFront
+    for (const edge of ['front','back','left','right']) {
+      const alongX = edge === 'front' || edge === 'back'
+      const start = alongX ? left : back+0.105, end = alongX ? right : quayFront-0.105
       const cuts = [start]
-      for (let t = start+0.48+(row%2)*0.32; t < end-0.17; t += 0.71) cuts.push(t)
+      for (let t = start+0.48+(row%2)*0.32; t < end-0.17; t += 0.71+0.077*Math.sin(t*3.9+row)) cuts.push(t)
       cuts.push(end)
       for (let k = 1; k < cuts.length; k++) {
         const mid = (cuts[k]+cuts[k-1])/2, width = cuts[k]-cuts[k-1]-0.017
         const y = foundation+(row+0.5)*h, mat = stones[(row*3+k)%stones.length]
-        if (front) mesh.box(mat, mid, y, quayFront-0.036, width, h-0.012, 0.13)
+        if (alongX) mesh.box(mat, mid, y, edge==='front' ? quayFront-0.036 : back+0.036, width, h-0.012, 0.13)
         else mesh.box(mat, edge === 'left' ? left+0.037 : right-0.037, y, mid, 0.13, h-0.012, width)
       }
     }
   }
-  mesh.box('lime mortar', cx, wallTop+0.035, cz, right-left, 0.082, quayFront-back)
+  mesh.box('lime mortar', cx, (wallTop+quayLevel-0.021)/2, cz, right-left-0.056, quayLevel-0.021-wallTop, quayFront-back-0.056)
   for (let row = 0; row < 5; row++) {
     const depth = (quayFront-back)/5, z = quayFront-(row+0.5)*depth, ends = [left]
     for (let x = left+0.49+(row%2)*0.42; x < right-0.18; x += 0.93) ends.push(x)
     ends.push(right)
     for (let i = 1; i < ends.length; i++) {
-      mesh.box(row === 0 ? 'capstone' : stones[(row+i*3)%stones.length],
-        (ends[i]+ends[i-1])/2, quayLevel-0.066, z, ends[i]-ends[i-1]-0.017, 0.132, depth-0.017)
+      flag(row === 0 ? 'capstone' : stones[(row+i*3)%stones.length],
+        ends[i-1]+0.006,ends[i]-0.006,z-depth/2+0.006,z+depth/2-0.006,quayLevel,0.132,row===0 ? 0.017 : 0.010)
+      if (row===0 && (i===1 || i===4 || i===5)) {
+        stoneCramp(mesh,[ends[i]-0.114,quayLevel+0.003,z+0.11],[ends[i]+0.114,quayLevel+0.003,z+0.11])
+      }
     }
   }
   ++mesh.object
@@ -53,7 +107,11 @@ export function makeQuayside(deckY: number) {
     const top = quayLevel + (deckY-quayLevel)*(i+1)/stairCount
     const height = top-0.036-foundation, z = quayFront+(i+0.5)*stairDepth
     mesh.box('weathered limestone', pierApproach.x, foundation+height/2, z, 1.38, height, stairDepth+0.001)
-    mesh.box('capstone', pierApproach.x, top-0.024, z+0.009, 1.425, 0.048, stairDepth+0.026)
+    const x0=pierApproach.x-0.7125, x1=pierApproach.x+0.7125
+    const joint=pierApproach.x + [-0.20,0.15,-0.09,0.23][i]
+    for (const [a,b] of [[x0,joint-0.004],[joint+0.004,x1]]) {
+      flag('capstone',a,b,z-stairDepth/2-0.004,z+stairDepth/2+0.022,top,0.053,0.018)
+    }
   }
   return mesh.finish()
 }
@@ -162,22 +220,26 @@ function image(data: string, name: string) {
   return new File([Uint8Array.from(binary, c => c.charCodeAt(0))], name, { type: 'image/png' })
 }
 const stoneMap = image(limestone, 'quay-limestone.png'), woodMap = image(timber, 'quay-timber.png')
-const finishes = new Map<string, BaseColorMaterial>([
-  ['lime mortar', { color: [0.28, 0.27, 0.23], map: stoneMap }],
-  ['sandstone', { color: [0.59, 0.52, 0.39], map: stoneMap }],
-  ['weathered limestone', { color: [0.53, 0.53, 0.46], map: stoneMap }],
-  ['warm freestone', { color: [0.62, 0.53, 0.43], map: stoneMap }],
-  ['capstone', { color: [0.67, 0.64, 0.57], map: stoneMap }],
-  ['dock oak', { color: [0.39, 0.26, 0.13], map: woodMap }],
-  ['sawn cedar', { color: [0.63, 0.45, 0.26], map: woodMap }],
-  ['ochre boards', { color: [0.62, 0.31, 0.13], map: woodMap }],
-  ['wrought iron', { color: [0.10, 0.11, 0.105] }],
-  ['hemp rope', { color: [0.53, 0.40, 0.24] }],
-  ['lamp glass', { color: [0.76, 0.60, 0.30] }],
-  ['aged zinc', { color: [0.19, 0.285, 0.284] }],
-  ['weathered zinc', { color: [0.245, 0.325, 0.31] }],
-  ['zinc flashing', { color: [0.275, 0.345, 0.34] }],
-  ['harbor blue', { color: [0.105, 0.255, 0.275], map: woodMap }],
+export const harborSailcloth = image(sailcloth, 'lug-sailcloth.png')
+const roughnessMap = image(stoneRoughness, 'quay-stone-roughness.png')
+const finishes = new Map<string, SceneMaterial>([
+  ['lime mortar', { color: [0.28, 0.27, 0.23], map: stoneMap, roughness: 0.96 }],
+  ['sandstone', { color: [0.59, 0.52, 0.39], map: stoneMap, roughness: 0.97, roughnessMap }],
+  ['weathered limestone', { color: [0.53, 0.53, 0.46], map: stoneMap, roughness: 0.90, roughnessMap }],
+  ['warm freestone', { color: [0.62, 0.53, 0.43], map: stoneMap, roughness: 0.93, roughnessMap }],
+  ['capstone', { color: [0.67, 0.64, 0.57], map: stoneMap, roughness: 0.70, roughnessMap }],
+  ['dock oak', { color: [0.39, 0.26, 0.13], map: woodMap, roughness: 0.72 }],
+  ['sawn cedar', { color: [0.63, 0.45, 0.26], map: woodMap, roughness: 0.86 }],
+  ['ochre boards', { color: [0.62, 0.31, 0.13], map: woodMap, roughness: 0.60 }],
+  ['wrought iron', { color: [0.19, 0.20, 0.19], metallic: 0.82, roughness: 0.41 }],
+  ['hemp rope', { color: [0.53, 0.40, 0.24], roughness: 0.95 }],
+  ['lamp glass', { color: [0.76, 0.60, 0.30], roughness: 0.16 }],
+  ['fish market silver', { color: [0.78,0.83,0.76], roughness: 0.24 }],
+  ['fish market mackerel', { color: [0.22,0.38,0.42], roughness: 0.27 }],
+  ['aged zinc', { color: [0.27, 0.35, 0.35], metallic: 0.70, roughness: 0.49 }],
+  ['weathered zinc', { color: [0.245, 0.325, 0.31], metallic: 0.41, roughness: 0.63 }],
+  ['zinc flashing', { color: [0.41, 0.47, 0.46], metallic: 0.92, roughness: 0.31 }],
+  ['harbor blue', { color: [0.105, 0.255, 0.275], map: woodMap, roughness: 0.53 }],
 ])
 
 // Build the fittings as indexed surfaces with physical thickness so the camera
@@ -237,7 +299,7 @@ export class HarborMesh {
   }
 
   finish() {
-    const indices: number[] = [], materials = new Map<string, BaseColorMaterial>()
+    const indices: number[] = [], materials = new Map<string, SceneMaterial>()
     const draws = Array.from(this.batches, ([material, batch]) => {
       const firstIndex = indices.length
       for (const index of batch) indices.push(index)

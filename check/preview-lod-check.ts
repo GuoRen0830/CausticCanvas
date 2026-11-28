@@ -32,12 +32,17 @@ export async function checkPreviewLod(report: (line: string) => void) {
     materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.8, 0.6, 0.4, 1] } }],
   }
   try {
+    let sourceTriangles = 0, outputTriangles = 0
     const { mesh, materials } = await readPreviewGltf({ document: doc, base: new URL('https://fixture.invalid/') }, undefined, {
       maxTriangles: 900, simplifyToBudget: true,
       crop: () => ({ min: [0.2, -1, 0.25], max: [1.8, 1, 1.75] }),
+      onSimplified(source, result) { sourceTriangles = source; outputTriangles = result },
     })
     if (mesh.indices.length > 900 * 3 || mesh.draws?.length !== 2 || !materials.has('0')) {
       throw new Error('LOD must preserve both material instances and stay within the final clipped triangle budget.')
+    }
+    if (sourceTriangles <= 900 || outputTriangles !== mesh.indices.length / 3) {
+      throw new Error('Source LOD reporting must count measured input faces and the final clipped output.')
     }
     let area = 0, seam = false
     const byPosition = new Map<string, number>()

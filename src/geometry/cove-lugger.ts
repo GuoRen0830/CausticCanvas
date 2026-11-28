@@ -1,6 +1,6 @@
-import canvasTile from '../../scene/smugglers-cove/lug-sailcloth.png?inline'
 import { sceneVertexStride } from '../rendering/scene-mesh'
-import { HarborMesh } from './cove-quayside'
+import { HarborMesh, harborSailcloth } from './cove-quayside'
+import { makeLuggerCuddy } from './cove-lugger-cuddy'
 
 type Point = [number, number, number]
 const up: Point = [0, 1, 0]
@@ -25,7 +25,14 @@ function hull(t: number, h: number, side: number): Point {
 function buildHull(mesh: HarborMesh) {
   const rings = [0,0.20,0.39,0.52,0.64,0.75,0.79,0.855,0.92,1]
   const colors = ['dock oak',blue,teal,blue,teal,'ochre boards',gold,blue,'dock oak']
-  const stations = 24
+  const stations = 36
+  // The proud lower edge of each overlapping plank casts a narrow shadow.
+  // Its bevel merges into the stem and catches light around both quarters.
+  function lowerEdge(t: number, h: number, side: number, lap: number): Point {
+    const p = hull(t,h,side)
+    p[2] += side*lap*(0.32+0.68*Math.sin(Math.PI*t))
+    return p
+  }
   function deck(t: number, across: number): Point {
     const edge = hull(t,1,1)
     return [edge[0], edge[1]-0.035 + 0.050*(1-across*across), edge[2]*across]
@@ -34,11 +41,13 @@ function buildHull(mesh: HarborMesh) {
     const t = i/stations, end = (i+1)/stations
     for (let row = 1; row < rings.length; row++) {
       const a = rings[row-1], b = rings[row]
+      const lap = row > 2 && row !== 6 && row !== 7 ? 0.021 : 0
       for (const side of [-1,1]) {
-        mesh.face(colors[row-1], [hull(t,a,side),hull(end,a,side),hull(end,b,side),hull(t,b,side)], [0,0,side])
+        mesh.face(colors[row-1], [lowerEdge(t,a,side,lap),lowerEdge(end,a,side,lap),hull(end,b,side),hull(t,b,side)], [0,0,side])
+        if (lap) mesh.face(colors[row-1],[hull(t,a,side),hull(end,a,side),lowerEdge(end,a,side,lap),lowerEdge(t,a,side,lap)],[0,-1,0])
       }
       for (const k of [0,1]) if (i === (k ? stations-1 : 0)) {
-        mesh.face(colors[row-1], [hull(k,a,-1),hull(k,a,1),hull(k,b,1),hull(k,b,-1)], [2*k-1,0,0])
+        mesh.face(colors[row-1], [lowerEdge(k,a,-1,lap),lowerEdge(k,a,1,lap),hull(k,b,1),hull(k,b,-1)], [2*k-1,0,0])
       }
     }
     mesh.face('dock oak', [hull(t,0,-1),hull(end,0,-1),hull(end,0,1),hull(t,0,1)], [0,-1,0])
@@ -149,12 +158,158 @@ function stitchSail(mesh: HarborMesh, cut: Cut, columns: number, rows: number, j
   }
   seam(0,0,1,0,columns,0.017,piping)
   if (!jib) {
+    // Set the cloth marks on the same triangulated billow as the sail, so the
+    // weave and shading stay continuous even where the draft changes quickly.
+    function applique(u: number, v: number, side: number): Point {
+      const x = u*columns, y = v*rows, i = Math.floor(x), j = Math.floor(y)
+      const s = x-i, t = y-j, grid = side > 0 ? front : back
+      const a = grid[j][i], b = s >= t ? grid[j][i+1] : grid[j+1][i], c = grid[j+1][i+1]
+      const w = [1-Math.max(s,t),Math.abs(s-t),Math.min(s,t)]
+      const blend = (a: Point,b: Point,c: Point): Point =>
+        [w[0]*a[0]+w[1]*b[0]+w[2]*c[0],w[0]*a[1]+w[1]*b[1]+w[2]*c[1],w[0]*a[2]+w[1]*b[2]+w[2]*c[2]]
+      const p = blend(a,b,c), uv: [number,number] = [p[0]*1.12,p[1]*1.3]
+      const n = blend(fabricVertices.get(key(a))!.normal,fabricVertices.get(key(b))!.normal,fabricVertices.get(key(c))!.normal)
+      p[2] += side*0.006
+      const length = Math.hypot(...n)
+      fabricVertices.set(key(p),{normal:[n[0]/length,n[1]/length,n[2]/length],uv})
+      return p
+    }
+    for (const side of [-1,1]) {
+      // The loft mark is sewn separately to each face. Both sides read C7.
+      const mark = (x: number,y: number) =>
+        applique(0.47+side*(x-0.9)*0.155,0.64+y*0.214+(side>0 ? 0.02 : 0),side)
+      const rim = (a: number, inside: boolean) => mark(0.41+(inside ? 0.242 : 0.410)*Math.cos(a),
+        0.50+(inside ? 0.323 : 0.50)*Math.sin(a))
+      for (let i = 0; i < 20; i++) {
+        const a = (0.21+1.58*i/20)*Math.PI, b = (0.21+1.58*(i+1)/20)*Math.PI
+        mesh.face(patched,[rim(a,false),rim(b,false),rim(b,true),rim(a,true)],[0,0,side])
+      }
+      const bar = (u: number) => mix(0.96,1.74,u)
+      for (let i = 0; i < 8; i++) {
+        const a = bar(i/8), b = bar((i+1)/8)
+        mesh.face(patched,[mark(a,0.84),mark(b,0.84),mark(b,1),mark(a,1)],[0,0,side])
+      }
+      for (let i = 0; i < 12; i++) {
+        const a = i/12, b = (i+1)/12, stem = (v: number) => mix(1.13,1.56,v)
+        mesh.face(patched,[mark(stem(a),a*0.84),mark(stem(b),b*0.84),
+          mark(stem(b)+0.18,b*0.84),mark(stem(a)+0.18,a*0.84)],[0,0,side])
+      }
+      for (let i = 1; i < columns; i += 3) {
+        const x = i/columns, y = 2/rows
+        mesh.face(sailPatch,[applique(x,y-0.046,side),applique(x+0.023,y,side),
+          applique(x,y+0.048,side),applique(x-0.023,y,side)],[0,0,side])
+      }
+    }
     seam(0,2/rows,1,0,columns,0.015,'tanbark seam')
     for (let i = 1; i < columns; i += 3) {
       const a = cut(i/columns,2/rows)
       a[2] += 0.018
       cord(mesh,a,[a[0]-0.038,a[1]-0.085,a[2]+0.035],0,0.012,piping)
     }
+  }
+}
+
+// Rope fenders follow the flare of the hull from the rail down to the waterline.
+function ropeFender(mesh: HarborMesh, station: number, side: number) {
+  const sheer = hull(station,1,side), keel = hull(station,0,side)
+  const profile = [[0.075,0.034],[0.095,0.066],[0.155,0.094],
+    [0.17,0.096],[0.25,0.093],[0.265,0.09],[0.31,0.062],[0.33,0.034]]
+  const sides = 10
+  const rings = profile.map(([y,r]) => {
+    const [x,,z] = hull(station,(y-keel[1])/(sheer[1]-keel[1]),side)
+    return Array.from({length:sides},(_,i): Point => {
+      const a = 2*Math.PI*i/sides
+      return [x+r*Math.cos(a),y,z+side*(r+0.005)+r*Math.sin(a)]
+    })
+  })
+  for (let j = 1; j < rings.length; j++) {
+    const mat = j === 3 || j === 5 ? 'tarred shroud' : 'hemp rope'
+    for (let i = 0; i < sides; i++) {
+      const n = (i+1)%sides, a = 2*Math.PI*(i+0.5)/sides
+      mesh.face(mat,[rings[j-1][i],rings[j-1][n],rings[j][n],rings[j][i]],[Math.cos(a),0,Math.sin(a)])
+    }
+  }
+  mesh.face('hemp rope',rings[0],[0,-1,0])
+  const end = rings.at(-1)!
+  mesh.face('hemp rope',end,up)
+  const neck = between(end[0],end[sides/2],0.5)
+  const lead: Point = [sheer[0],sheer[1]+0.027,sheer[2]+side*0.018]
+  const cleat: Point = [sheer[0]+0.075,sheer[1]+0.035,sheer[2]-side*0.071]
+  mesh.beam('hemp rope',neck,lead,0.024,0.024)
+  mesh.beam('hemp rope',lead,cleat,0.020,0.020)
+  mesh.box('dock oak',cleat[0],cleat[1]-0.015,cleat[2],0.13,0.060,0.039)
+}
+
+// A gunwale-mounted net roller lets the crew haul a wet net over the aft quarter.
+// Its axle runs along the rail; the taper guides the net away from the bearings.
+function netRoller(mesh: HarborMesh) {
+  const ends = [hull(0.12,1,-1),hull(0.26,1,-1)]
+  const [a,b] = ends, dx = b[0]-a[0], dz = b[2]-a[2], span = Math.hypot(dx,dz)
+  const axisX = dx/span, axisZ = dz/span, axleY = Math.max(a[1],b[1])+0.162
+  const at = (distance: number, height: number, outside: number): Point =>
+    [a[0]+axisX*distance+axisZ*outside,axleY+height,a[2]+axisZ*distance-axisX*outside]
+  for (const [i,distance] of [0,span].entries()) {
+    const support = ends[i]
+    const foot: Point = [support[0],support[1]-0.008,support[2]+0.048]
+    mesh.beam('dock oak',foot,at(distance,0,0.035),0.082,0.088)
+    mesh.beam('aged zinc',at(distance,-0.047,0.035),at(distance,0.052,0.035),0.093,0.091)
+  }
+  mesh.beam('wrought iron',at(-0.069,0,0.035),at(span+0.063,0,0.035),0.041,0.041)
+  const spool = [[0.065,0.081],[0.09,0.081],[0.18,0.061],[span/2,0.055],
+    [span-0.18,0.061],[span-0.09,0.081],[span-0.065,0.081]]
+  const rings = spool.map(([d,r]) => Array.from({length:12},(_,i) => {
+    const angle = Math.PI*i/6
+    return at(d,r*Math.sin(angle),0.035+r*Math.cos(angle))
+  }))
+  mesh.face('aged zinc',rings[0],[-axisX,0,-axisZ])
+  mesh.face('aged zinc',rings.at(-1)!,[axisX,0,axisZ])
+  for (let j = 1; j < rings.length; j++) for (let i = 0; i < 12; i++) {
+    const n = (i+1)%12, angle = Math.PI*(i+0.5)/6
+    mesh.face(j === 1 || j === rings.length-1 ? 'aged zinc' : 'sawn cedar',
+      [rings[j-1][i],rings[j-1][n],rings[j][n],rings[j][i]],
+      [axisZ*Math.cos(angle),Math.sin(angle),-axisX*Math.cos(angle)])
+  }
+}
+
+function bowAnchor(mesh: HarborMesh) {
+  // A spare stock anchor is lashed along the starboard bow. The wooden stock
+  // sits athwart the iron arms, with the upper end resting in a timber chock.
+  const p = (along: number, rise: number, out = 0): Point => {
+    const x = 1.06+along
+    return [x,0.242+0.23*along+rise,hull((x+2.63)/5.35,1,1)[2]+0.048+out]
+  }
+  mesh.beam('wrought iron',p(0,0),p(.90,0),.058,.052)
+  for (const side of [-1,1]) {
+    let previous = p(.015,0)
+    for (const [s,h] of [[-.015,.068],[.030,.141],[.122,.179],[.185,.178]]) {
+      const next = p(s,h*side)
+      mesh.beam('wrought iron',previous,next,.048,.042)
+      previous = next
+    }
+    // Two triangular palms broaden the forged arms at their tips.
+    const tip = p(.280,.132*side), a = p(.124,.141*side), b = p(.148,.230*side)
+    const face: Point[] = [tip,a,b]
+    mesh.face('wrought iron',face,[0,0,-1])
+    const spine = p(.182,.173*side,.037)
+    for (let i=0; i<3; i++) mesh.face('aged zinc',[face[i],face[(i+1)%3],spine],[0,0,1])
+  }
+  mesh.beam('dock oak',p(.73,.12,-.14),p(.73,-.05,.122),.071,.066)
+  mesh.beam('wrought iron',p(.73,.050,-.04),p(.73,.023,.008),.076,.072)
+  for (const d of [.18,.70]) {
+    const foot = p(d,0,-.060)
+    const [,,railZ] = hull((foot[0]+2.63)/5.35,1,1)
+    const y = hull((foot[0]+2.63)/5.35,1,1)[1]
+    const chock: Point = [foot[0],y+0.028,railZ-.055]
+    mesh.box('dock oak',chock[0],chock[1],chock[2],.092,.058,.147)
+    for (const dx of [-.025,.025]) {
+      const a: Point = [chock[0]+dx,chock[1]+.021,chock[2]-.03]
+      mesh.beam('hemp rope',a,p(d+dx,-.025,.042),.016,.016)
+      mesh.beam('hemp rope',p(d+dx,-.025,.042),p(d+dx,-.039,-.018),.016,.016)
+    }
+  }
+  for (let i=0; i<14; i++) {
+    const at = (angle:number) => p(.95+.058*Math.cos(angle),.056*Math.sin(angle))
+    mesh.beam('wrought iron',at(2*Math.PI*i/14),at(2*Math.PI*(i+1)/14),.019,.019)
   }
 }
 
@@ -171,9 +326,9 @@ function deckFittings(mesh: HarborMesh) {
   for (const y of [-0.06,0.23]) mesh.box('wrought iron',-2.60,y,0,0.23,0.041,0.11)
   mesh.beam('sawn cedar',[-2.66,0.55,0],[-2.28,0.68,-0.09],0.071,0.059)
   mesh.beam('sawn cedar',[-2.28,0.68,-0.09],[-1.64,0.71,-0.17],0.047,0.048)
-  // Raised fish hold with removable covers. The hinged forehatch and grated
-  // cover sit in open portions of the deck on either side of the mast.
-  for (const [x,w,d] of [[-0.72,0.88,0.68],[1.41,0.49,0.50]]) {
+  // The hinged forehatch sits ahead of the mast and stays clear of the jib sheet.
+  {
+    const x=1.41, w=0.49, d=0.50
     mesh.box(blue,x,0.485,0,w,0.12,d)
     for (let i = 0; i < 6; i++) {
       mesh.box('lugger deck',x-w/2+w*(i+0.5)/6,0.561,0,w/6-0.009,0.045,d+0.025)
@@ -195,16 +350,20 @@ function deckFittings(mesh: HarborMesh) {
     mesh.beam('hemp rope',previous,next,0.024,0.022)
     previous = next
   }
+  ropeFender(mesh,0.27,1)
+  ropeFender(mesh,0.72,1)
+  ropeFender(mesh,0.66,-1)
+  netRoller(mesh)
+  bowAnchor(mesh)
 }
-
-const clothBytes = atob(canvasTile.slice(canvasTile.indexOf(',')+1))
-const clothMap = new File([Uint8Array.from(clothBytes,char => char.charCodeAt(0))], 'lug-sailcloth.png', {type:'image/png'})
 
 export function makeCoveLugger() {
   const mesh = new HarborMesh()
   buildHull(mesh)
   ++mesh.object
   deckFittings(mesh)
+  ++mesh.object
+  makeLuggerCuddy(mesh)
   ++mesh.object
   const mastFoot: Point = [0.47,0.45,0], mastHead: Point = [0.27,2.91,-0.22]
   mesh.beam('dock oak',mastFoot,mastHead,0.087,0.086)
@@ -241,15 +400,19 @@ export function makeCoveLugger() {
   const timber = result.materials.get('sawn cedar')?.map
   for (const [name,color] of [[blue,[0.055,0.22,0.235]],[teal,[0.080,0.30,0.29]],
     ['lugger deck',[0.71,0.51,0.30]]] as [string,Point][]) {
-    result.materials.set(name,{color,map:timber})
+    result.materials.set(name,{color,map:timber,roughness:name === 'lugger deck' ? 0.76 : 0.35})
   }
-  result.materials.set(gold,{color:[0.90,0.77,0.52]})
-  result.materials.set('tarred shroud',{color:[0.17,0.13,0.084]})
-  result.materials.set(piping,{color:[0.69,0.55,0.32]})
-  result.materials.set('tanbark seam',{color:[0.46,0.215,0.099]})
+  result.materials.set(gold,{color:[0.90,0.77,0.52],roughness:0.42})
+  result.materials.set('cream band',{color:[0.90,0.80,0.56],map:timber,roughness:0.56})
+  result.materials.set('lamp glass',{color:[0.079,0.275,0.30],roughness:0.15})
+  result.materials.set('verdigris',{color:[0.19,0.415,0.385],metallic:0.54,roughness:0.49})
+  result.materials.set('lens brass',{color:[0.84,0.61,0.29],metallic:0.90,roughness:0.29})
+  result.materials.set('tarred shroud',{color:[0.17,0.13,0.084],roughness:0.66})
+  result.materials.set(piping,{color:[0.69,0.55,0.32],roughness:0.91})
+  result.materials.set('tanbark seam',{color:[0.46,0.215,0.099],roughness:0.90})
   const cloth = new Map<string,Point>([[red,[0.83,0.32,0.151]],[copper,[0.91,0.392,0.18]],[sailPatch,[0.73,0.337,0.182]],
     [reef,[0.66,0.215,0.121]],[ivory,[0.92,0.82,0.62]],[patched,[0.86,0.745,0.54]]])
-  for (const [name,color] of cloth) result.materials.set(name,{color,map:clothMap})
+  for (const [name,color] of cloth) result.materials.set(name,{color,map:harborSailcloth,roughness:name === patched ? 0.72 : 0.93})
   // HarborMesh batches by material. Only the sewn panels use continuous fabric
   // coordinates and smooth shading; the deck, booms and bolt ropes stay faceted.
   const { vertices, indices, uvs, draws } = result.mesh

@@ -56,8 +56,8 @@ export function makeCovePotMarkers() {
   lathe(mesh, hang, [0,1,0], pear.map(([t,r,m]) => [t*0.68,r*0.68,m]), 14)
   mesh.beam('hemp rope', [-3.17,ridge-0.17,-2.815], [-3.17,ridge+0.031,-2.89], 0.016,0.016)
   const result = mesh.finish()
-  result.materials.set(red, { color: [0.59,0.091,0.040] })
-  result.materials.set(cream, { color: [0.82,0.70,0.48] })
-  result.materials.set(cork, { color: [0.43,0.237,0.099] })
+  result.materials.set(red, { color: [0.59,0.091,0.040], roughness: 0.36 })
+  result.materials.set(cream, { color: [0.82,0.70,0.48], roughness: 0.45 })
+  result.materials.set(cork, { color: [0.43,0.237,0.099], roughness: 0.67 })
   return result
 }

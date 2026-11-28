@@ -16,10 +16,11 @@ export function createFrameLoop(
   let gpuBusy = false
   let dirty = false
   let running = false
+  let paused = false
   let disposed = false
 
   function schedule() {
-    if (disposed || gpuBusy || frameId !== null || (!dirty && !running)) return
+    if (disposed || paused || gpuBusy || frameId !== null || (!dirty && !running)) return
     frameId = requestAnimationFrame(tick)
   }
 
@@ -39,13 +40,13 @@ export function createFrameLoop(
 
   function tick() {
     frameId = null
-    if (disposed || (!dirty && !running)) return
+    if (disposed || paused || (!dirty && !running)) return
 
     dirty = false
     gpuBusy = true
 
     try {
-      // One synchronous batch per animation frame; paused frames get zero steps.
+      // A camera-only redraw uses zero optimization steps.
       const commands = encodeFrame(running ? maxStepsPerFrame : 0)
       device.queue.submit([commands])
 
@@ -63,6 +64,15 @@ export function createFrameLoop(
   }
 
   return {
+    setPaused(value: boolean) {
+      paused = value
+      if (paused && frameId !== null) {
+        cancelAnimationFrame(frameId)
+        frameId = null
+      }
+      schedule()
+    },
+
     requestFrame() {
       if (disposed) return
       // Coalesce changes while a frame is scheduled or the GPU is busy.
