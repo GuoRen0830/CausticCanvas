@@ -74,3 +74,8 @@ fn fragmentTexture(
 
   return displayColor(irradiance, display.exposure);
 }
+
+@fragment
+fn fragmentRGB(@location(0) uv: vec2f) -> @location(0) vec4f {
+  return displayColorRGB(textureLoad(imageTexture, pixelFromUV(uv), 0).rgb, display.exposure);
+}

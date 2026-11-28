@@ -15,6 +15,12 @@ export function buildSceneBvh(mesh: SceneMesh) {
   const floats = new Float32Array(original)
   const words = new Uint32Array(original)
   const order = Array.from({ length: count }, (_, i) => i)
+  for (const draw of mesh.draws ?? []) {
+    if (draw.doubleSided) {
+      const end = draw.firstIndex + draw.indexCount
+      for (let i = draw.firstIndex; i < end; i += 3) words[i * 4 + 11] = 1
+    }
+  }
   for (let face = 0; face < count; face++) {
     const corners = indices.subarray(3 * face, 3 * face + 3)
     const object = vertices[corners[0] * sceneVertexStride + 10]

@@ -30,6 +30,12 @@ export function placeObjOnReceiver(
   let throwDistance = Math.max(0.5 * Math.hypot(width, depth) * throwPerRadius,
     height + Math.max(2 * flatThickness, 0.18 * Math.max(width, depth)))
   const centerX = 0.5 * (lo[0] + hi[0]), centerZ = 0.5 * (lo[2] + hi[2])
+  const tangents = mesh.tangents
+  if (tangents) for (let i = 0; i < tangents.length; i += 4) {
+    const ty = tangents[i + 1]
+    tangents[i + 1] = tangents[i + 2]
+    tangents[i + 2] = -ty
+  }
   for (let i = 0; i < v.length; i += sceneVertexStride) {
     const elevation = (v[i + 1] - lo[1]) * scale, ny = v[i + 4]
     v[i] = (v[i] - centerX) * scale

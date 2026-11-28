@@ -1,10 +1,16 @@
 import type { ForwardResult } from '../contracts'
+import apertureUV from './shaders/aperture-uv.wgsl?raw'
+import hitTypes from './shaders/scene-hit.wgsl?raw'
+import bvhQuery from './shaders/bvh-query.wgsl?raw'
+import cachedHitPlane from './shaders/volume-hit-plane.wgsl?raw'
+import exportVolumeHit from './shaders/export-volume-hit.wgsl?raw'
 import volumeShader from './shaders/beam-volume-build.wgsl?raw'
 
 const resolution = [144, 144, 96] as const
 // Stable lens-space strata. Leave headroom for the optimizer during training,
 // then oversample the last evaluation to resolve the narrowest folds.
 const samplesPerSide = 192
+const exportSamplesPerSide = 240
 const trainingSamplesPerSide = 160
 type Point = [number, number, number]
 
@@ -19,7 +25,7 @@ export function beamVolumeBounds(result: ForwardResult, receiverZ: number): { mi
   return { min: [-x, -y, 0], max: [x, y, receiverZ] }
 }
 
-export function createBeamVolume(device: GPUDevice) {
+export function createBeamVolume(device: GPUDevice, traceSampleHits = false) {
   const [width, height, depth] = resolution
   const texture = device.createTexture({
     label: 'Refracted light in the medium', dimension: '3d', size: [width, height, depth],
@@ -27,22 +33,33 @@ export function createBeamVolume(device: GPUDevice) {
   })
   const textureView = texture.createView()
   const sampler = device.createSampler({ minFilter: 'linear', magFilter: 'linear' })
+  const whiteFilter = device.createTexture({
+    label: 'White beam filter', size: [1, 1], format: 'rgba8unorm',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  })
+  device.queue.writeTexture({ texture: whiteFilter }, new Uint8Array([255, 255, 255, 255]), {}, [1, 1])
+  const whiteView = whiteFilter.createView()
+  const planeBytes = 4 * width * height * depth
   const accumulator = device.createBuffer({
-    label: 'Volume fluence-rate accumulator', size: 4 * width * height * depth,
+    label: 'Volume RGB fluence-rate accumulator', size: 3 * planeBytes,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   })
-  // Narrow and broad horizontal filter results share one packed half-float pair.
+  // Two half-float pairs store RGB and a broader neighbourhood reference.
+  // White light only needs the first plane in each scratch buffer.
   const filteredRows = device.createBuffer({
-    label: 'Transversely filtered beam rows', size: accumulator.size, usage: GPUBufferUsage.STORAGE,
+    label: 'Transversely filtered beam rows', size: 2 * planeBytes, usage: GPUBufferUsage.STORAGE,
   })
   const params = device.createBuffer({
     label: 'Beam volume parameters', size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   // Plane-only forward models omit BVH records. Their rays reach the volume boundary.
   const emptyHits = device.createBuffer({ label: 'Unused volume hit data', size: 48, usage: GPUBufferUsage.STORAGE })
-  const module = device.createShaderModule({ label: 'Refracted beam volume', code: volumeShader })
+  const hitDistance = traceSampleHits ? bvhQuery + '\n' + exportVolumeHit : cachedHitPlane
+  const module = device.createShaderModule({ label: 'Refracted beam volume',
+    code: [apertureUV, hitTypes, hitDistance, volumeShader].join('\n') })
   const inject = device.createComputePipeline({
-    label: 'Deposit refracted beams', layout: 'auto', compute: { module, entryPoint: 'inject' },
+    label: 'Deposit refracted beams', layout: 'auto', compute: { module, entryPoint: 'inject',
+      constants: { traceSampleHits: Number(traceSampleHits) } },
   })
   const filterRows = device.createComputePipeline({
     label: 'Filter refracted beam rows', layout: 'auto', compute: { module, entryPoint: 'filterRows' },
@@ -58,6 +75,7 @@ export function createBeamVolume(device: GPUDevice) {
   })
   const resolveGroup = device.createBindGroup({
     layout: resolve.getBindGroupLayout(0), entries: [
+      { binding: 0, resource: { buffer: params } },
       { binding: 7, resource: textureView }, { binding: 8, resource: { buffer: filteredRows } },
     ],
   })
@@ -65,36 +83,42 @@ export function createBeamVolume(device: GPUDevice) {
   const floats = new Float32Array(data), words = new Uint32Array(data)
   words.set(resolution, 16)
   let boundBuffers: GPUBuffer[] = []
+  let boundFilter: GPUTextureView | undefined
   let injectGroup: GPUBindGroup
 
   return {
     textureView, sampler,
-    update(encoder: GPUCommandEncoder, result: ForwardResult, offsets: GPUBuffer, receiverZ: number, training = false) {
+    update(encoder: GPUCommandEncoder, result: ForwardResult, offsets: GPUBuffer, receiverZ: number,
+      training = false, colorFilter?: GPUTextureView) {
       const { lens, buffer: rays } = result.beams
-      const hitBuffer = result.firstHits?.buffer ?? emptyHits
+      const hitBuffer = traceSampleHits ? result.firstHits?.nodes : result.firstHits?.buffer
       const triangles = result.firstHits?.triangles ?? emptyHits
-      const buffers = [params, lens.heightBuffer, offsets, rays, hitBuffer, triangles, accumulator]
-      if (buffers.some((buffer, index) => buffer !== boundBuffers[index])) {
+      const buffers = [params, lens.heightBuffer, offsets, rays, hitBuffer ?? emptyHits, triangles, accumulator]
+      const filter = colorFilter ?? whiteView
+      if (boundFilter !== filter || buffers.some((buffer, index) => buffer !== boundBuffers[index])) {
+        boundFilter = filter
         boundBuffers = buffers
         injectGroup = device.createBindGroup({
           layout: inject.getBindGroupLayout(0),
-          entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
+          entries: [...buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
+            { binding: 9, resource: filter }],
         })
       }
 
       // Fixed strata give a stationary image when the camera or the lens moves.
       // Keep enough samples on the narrow axis for thin, textured footprints.
       const aspect = Math.min(2, Math.max(0.5, Math.sqrt(lens.sizeX / lens.sizeY)))
-      const strata = training ? trainingSamplesPerSide : samplesPerSide
+      const strata = traceSampleHits ? exportSamplesPerSide : training ? trainingSamplesPerSide : samplesPerSide
       const nx = Math.round(strata * aspect), ny = Math.round(strata / aspect)
       const { min, max } = beamVolumeBounds(result, receiverZ)
       words.set([lens.columns, lens.rows, nx, ny], 0)
       floats.set([lens.sizeX, lens.sizeY], 4)
-      words[6] = result.firstHits ? 1 : 0
+      words[6] = Number(!!hitBuffer)
+      words[7] = Number(!!colorFilter)
       floats.set(min, 8)
       floats.set(max.map((upper, axis) => (upper - min[axis]) / resolution[axis]), 12)
       device.queue.writeBuffer(params, 0, data)
-      encoder.clearBuffer(accumulator)
+      encoder.clearBuffer(accumulator, 0, colorFilter ? 3 * planeBytes : planeBytes)
       const pass = encoder.beginComputePass({ label: 'Build refracted light field' })
       pass.setPipeline(inject)
       pass.setBindGroup(0, injectGroup)
@@ -110,6 +134,7 @@ export function createBeamVolume(device: GPUDevice) {
     destroy() {
       params.destroy()
       emptyHits.destroy()
+      whiteFilter.destroy()
       accumulator.destroy()
       filteredRows.destroy()
       texture.destroy()

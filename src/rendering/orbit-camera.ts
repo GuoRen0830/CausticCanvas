@@ -36,9 +36,9 @@ export function createOrbitCamera(
 
   // Fit the subject and inlet separately. A single box as wide as the whole
   // model at lamp height would make the camera back away into empty space.
-  function fitDistance(aspect: number, verticalShift: number) {
-    const { size, target, lampTop, elevation: initialElevation = standardElevation } = framing
-    const heading = framing.azimuth ?? standardAzimuth
+  function fitDistance(options: OrbitCameraOptions, aspect: number, verticalShift: number) {
+    const { size, target, lampTop, elevation: initialElevation = standardElevation } = options
+    const heading = options.azimuth ?? standardAzimuth
     const sin = Math.sin(heading), cos = Math.cos(heading)
     const up = Math.sin(initialElevation), horizontal = Math.cos(initialElevation)
     const tanY = Math.tan(verticalFov / 2)
@@ -148,18 +148,22 @@ export function createOrbitCamera(
       onChange()
     },
 
-    update(aspect: number) {
+    update(aspect: number, options = framing) {
       // Y is up; azimuth turns around Y and elevation rises above XZ.
-      const { size, target, lampTop } = framing
+      const { size, target, lampTop } = options
+      const saved = poses.get(options)
+      const heading = options === framing ? azimuth : saved?.azimuth ?? options.azimuth ?? standardAzimuth
+      const pitch = options === framing ? elevation : saved?.elevation ?? options.elevation ?? standardElevation
+      const zoom = options === framing ? zoomFactor : saved?.zoomFactor ?? 1
       const span = Math.max(...size, lampTop ? lampTop.y - target[1] : 0)
       // Give the lamp headroom above the subject through an off-axis
       // projection. The optical setup never moves the center of rotation.
       const verticalShift = lampTop ? -0.14 : 0
-      const distance = fitDistance(aspect, verticalShift) * zoomFactor
-      const horizontalDistance = distance * Math.cos(elevation)
-      eye[0] = target[0] + horizontalDistance * Math.sin(azimuth)
-      eye[1] = target[1] + distance * Math.sin(elevation)
-      eye[2] = target[2] + horizontalDistance * Math.cos(azimuth)
+      const distance = fitDistance(options, aspect, verticalShift) * zoom
+      const horizontalDistance = distance * Math.cos(pitch)
+      eye[0] = target[0] + horizontalDistance * Math.sin(heading)
+      eye[1] = target[1] + distance * Math.sin(pitch)
+      eye[2] = target[2] + horizontalDistance * Math.cos(heading)
       mat4.lookAt(eye, target, [0, 1, 0], view)
       mat4.perspective(verticalFov, aspect, span * 0.005, distance + span * 2, projection)
       projection[9] = -verticalShift

@@ -1,6 +1,11 @@
 import type { DesignView } from '../optics/design-view'
 import type { TargetImage } from '../contracts'
 
+const sRGBToLinear = Float32Array.from({ length: 256 }, (_, byte) => {
+  const v = byte / 255
+  return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+})
+
 export function createDrawingPad(
   canvas: HTMLCanvasElement,
   size: Pick<TargetImage, 'width' | 'height'>,
@@ -40,57 +45,76 @@ export function createDrawingPad(
     for (let i = 0; i < width * height; i++) {
       // Use the visible depth range so a low-profile OBJ is legible against the floor.
       const relief = far > near ? (far - depths[2*i+1]) / (far - near) : 0
-      // Light grey relief on paper; taller surfaces are darker.
-      const shade = view.surfaceAreas[i] > 0 ? 226 - 70 * relief : 247
+      // A mid-grey guide keeps white light strokes visible over the floor.
+      const shade = view.surfaceAreas[i] > 0 ? 153 - 45 * relief : 215
       image.data.set([shade, shade, shade, 255], 4 * i)
     }
     ctx.putImageData(image, 0, 0)
     canvas.style.backgroundImage = `url(${guide.toDataURL()})`
     canvas.style.backgroundSize = '100% 100%'
   }
-  // Only the alpha channel becomes the target; the colour is for the eye.
-  context.strokeStyle = '#1d1d1f'
-  context.fillStyle = '#1d1d1f'
+  context.strokeStyle = context.fillStyle = '#ffffff'
   // Keep brush size proportional when the image resolution changes.
   context.lineWidth = Math.min(width, height) * 0.05
   context.lineCap = 'round'
   context.lineJoin = 'round'
 
-  let version = 0
-  // Snapshots taken before each stroke or clear, newest last.
+  let version = 0, colorVersion = 0
+  let previousPixels: ImageData | undefined
+  let values = new Float32Array(width * height)
+  // Committed RGBA snapshots preserve both the coverage and color across undo.
   const history: ImageData[] = []
   const historyLimit = 30
-  const remember = () => {
-    history.push(context.getImageData(0, 0, canvas.width, canvas.height))
-    if (history.length > historyLimit) history.shift()
-    onHistory?.(true)
-  }
   let activePointer: number | null = null
   let previous = { x: 0, y: 0 }
   const events = new AbortController()
 
-  const publish = () => {
-    const { width, height } = canvas
+  const publish = (remember = true) => {
     const strokes = context.getImageData(0, 0, width, height)
     const pixels = strokes.data
-    let clipped = false
-    const values = new Float32Array(width * height)
+    const old = previousPixels?.data
+    let clipped = false, shapeChanged = false, colorChanged = false, usesColor = false
 
-    // Looking along +Z with +X to the right puts optical +Y down the screen.
-    // Guide, brush mask and solver target therefore share the same row order.
     for (let i = 0; i < values.length; i++) {
-      const alpha = 4 * i + 3
-      if (pixels[alpha] && view?.surfaceAreas[i] === 0) {
-        pixels[alpha] = 0
+      const p = 4 * i
+      if (pixels[p + 3] && view?.surfaceAreas[i] === 0) {
+        pixels[p + 3] = 0
         clipped = true
       }
-      values[i] = pixels[alpha] / 255
+      const alpha = pixels[p + 3], oldAlpha = old?.[p + 3] ?? 0
+      if (alpha !== oldAlpha) shapeChanged = true
+      if (!alpha && !oldAlpha) continue
+      for (let c = 0; c < 3; c++) {
+        const channel = alpha ? pixels[p + c] : 255
+        if (channel !== 255) usesColor = true
+        if (channel !== (oldAlpha ? old![p + c] : 255)) colorChanged = true
+      }
     }
 
     if (clipped) context.putImageData(strokes, 0, 0)
-
-    // Publish a new snapshot after each completed stroke or clear.
-    onChange({ width, height, version: ++version, values })
+    if (previousPixels && !shapeChanged && !colorChanged) return
+    if (remember && previousPixels) {
+      history.push(previousPixels)
+      if (history.length > historyLimit) history.shift()
+    }
+    previousPixels = strokes
+    onHistory?.(history.length > 0)
+    if (shapeChanged) {
+      version++
+      values = Float32Array.from({ length: width * height }, (_, i) => pixels[4 * i + 3] / 255)
+    }
+    if (colorChanged) colorVersion++
+    // getImageData returns straight sRGB; the aperture filter consumes straight linear RGB.
+    // Transparent pixels have neutral transmission and zero shape weight.
+    let colors: Float32Array | undefined
+    if (usesColor) {
+      colors = new Float32Array(3 * width * height).fill(1)
+      for (let i = 0; i < values.length; i++) {
+        if (values[i] === 0) continue
+        for (let c = 0; c < 3; c++) colors[3 * i + c] = sRGBToLinear[pixels[4 * i + c]]
+      }
+    }
+    onChange({ width, height, version, colorVersion, values, colors })
   }
 
   const pointFromEvent = (event: PointerEvent) => {
@@ -113,7 +137,6 @@ export function createDrawingPad(
     if (activePointer !== null || !event.isPrimary || event.button !== 0) return
     activePointer = event.pointerId
     previous = pointFromEvent(event)
-    remember()
 
     // Keep receiving events when the pointer leaves the canvas.
     canvas.setPointerCapture(event.pointerId)
@@ -146,11 +169,11 @@ export function createDrawingPad(
   }
 
   const undo = () => {
+    if (activePointer !== null) return
     const snapshot = history.pop()
-    if (!snapshot || activePointer !== null) return
+    if (!snapshot) return
     context.putImageData(snapshot, 0, 0)
-    onHistory?.(history.length > 0)
-    publish()
+    publish(false)
   }
 
   const options = { signal: events.signal }
@@ -160,12 +183,14 @@ export function createDrawingPad(
   canvas.addEventListener('pointercancel', finishStroke, options)
   canvas.addEventListener('lostpointercapture', finishStroke, options)
   clear()
-  onHistory?.(false)
 
   return {
-    clear() {
-      if (activePointer === null) remember()
-      clear()
+    clear,
+    setColor(color: string) {
+      context.strokeStyle = context.fillStyle = color
+    },
+    setRecolor(enabled: boolean) {
+      context.globalCompositeOperation = enabled ? 'source-atop' : 'source-over'
     },
     undo,
     // Brush diameter as a fraction of the shorter side.

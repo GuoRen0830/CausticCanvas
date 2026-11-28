@@ -33,7 +33,7 @@ export async function createScenePasses(
   const nodes = upload('Training BVH nodes', view.bvh.nodes)
   const pixels = upload('Light-view visible surfaces', view.samples)
   const hits = allocate('Solver first hits', faceCount * 8, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC)
-  const firstHits = { mesh: view.mesh, buffer: hits, triangles }
+  const firstHits = { mesh: view.mesh, buffer: hits, triangles, nodes }
   // Each step binds the same buffers, so keep the last bind group per pipeline
   // instead of creating four new ones per training step.
   const cached = new Map<GPUComputePipeline, { buffers: GPUBuffer[], group: GPUBindGroup }>()

@@ -49,7 +49,7 @@ fn clipSide(interval: vec2f, atOrigin: f32, slope: f32) -> vec2f {
 }
 
 @fragment
-fn integrate(@builtin(position) pixel: vec4f) -> @location(0) vec2f {
+fn integrate(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   // Sample the ray through the chosen full-resolution depth texel's center,
   // including the unpaired final column/row of an odd-size viewport.
   let fullSize = textureDimensions(opaqueDepth);
@@ -73,7 +73,7 @@ fn integrate(@builtin(position) pixel: vec4f) -> @location(0) vec2f {
   let halfAperture = 0.5 * frame.aperture;
   let incident = boxInterval(origin, direction, vec3f(-halfAperture, -frame.incidentLength),
     vec3f(halfAperture, 0), limit);
-  var integrated = (incident.y - incident.x) * frame.incidentIrradiance * diffuseWeight;
+  var integrated = vec3f((incident.y - incident.x) * frame.incidentIrradiance * diffuseWeight);
 
   var refracted = boxInterval(origin, direction, frame.volumeMin, frame.volumeMax, limit);
   let extent = frame.volumeMax - frame.volumeMin;
@@ -110,19 +110,19 @@ fn integrate(@builtin(position) pixel: vec4f) -> @location(0) vec2f {
     for (var i = 0u; i < steps; i++) {
       let right = min(firstLength + f32(i) * stepLength, pathLength);
       let uvw = uvEntry + uvPerMeter * (0.5 * (left + right));
-      let field = textureSampleLevel(lightField, fieldSampler, uvw, 0).rg;
-      // R carries real light. G is its broader neighbourhood in this slice.
+      let field = textureSampleLevel(lightField, fieldSampler, uvw, 0);
+      // RGB carries the filtered rays. Alpha is their broader contrast reference.
       // Scale both by the same unfocused fan so the tiny bright exit and a
       // broad stroke retain a continuous body; folded sheets have a brighter core.
       let span = mix(vec2f(1.0), frame.receiverMagnification, uvw.z);
-      let relative = field * ((span.x * span.y) * invIncident);
-      let prominence = (relative.r - relative.g) / (relative.r + relative.g + 0.5);
+      let relative = vec2f(max(field.r, max(field.g, field.b)), field.a) * (span.x * span.y * invIncident);
+      let prominence = (relative.x - relative.y) / (relative.x + relative.y + 0.5);
       let ridge = smoothstep(0.04, 0.38, prominence);
-      let focus = smoothstep(1.45, 5.75, relative.r);
+      let focus = smoothstep(1.45, 5.75, relative.x);
       let weight = diffuseWeight + focus * (0.5 + 1.7 * ridge);
-      integrated += field.r * weight * (right - left);
+      integrated += field.rgb * weight * (right - left);
       left = right;
     }
   }
-  return vec2f(min(scatteringPerMeter * integrated / 12.56637, 60000.0), surfaceDistance);
+  return vec4f(min(scatteringPerMeter * integrated / 12.56637, vec3f(60000.0)), surfaceDistance);
 }

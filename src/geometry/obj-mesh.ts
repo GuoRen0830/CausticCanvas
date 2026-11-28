@@ -49,13 +49,18 @@ function faceNormal(a: Triple, b: Triple, c: Triple, line: number): Triple {
 
 // Read a triangulated polygon OBJ in its original coordinate system and units.
 // Explicit vertex normals preserve hard/smooth edges. Missing normals use the face winding.
-export function parseObjMesh(text: string): SceneMesh & { materialLibraries: string[] } {
+export function parseObjMesh(text: string): SceneMesh & { materialLibraries: string[]; vertexColorMaterials: Set<string> } {
   const positions: Triple[] = []
+  const colors = new Map<number, Triple>(), vertexColorMaterials = new Set<string>()
+  const coloredVertices = new Set<number>()
+  const secondaryUVs: number[][] = [], sourceTangents: number[][] = []
+  const outputUV1: number[] = [], outputTangents: number[] = []
   const normals: Triple[] = []
   const texcoords: [number, number][] = []
   const uvs: number[] = []
   const materialLibraries: string[] = [], draws: SceneDraw[] = []
   let material: string | undefined
+  let uvMask: number | undefined
   const vertices: number[] = []
   const indices: number[] = []
   const shared = new Map<string, number>()
@@ -65,16 +70,44 @@ export function parseObjMesh(text: string): SceneMesh & { materialLibraries: str
   const lines = text.split(/\r\n?|\n/)
   for (let i = 0; i < lines.length; i++) {
     const line = i + 1
-    const record = lines[i].split('#', 1)[0].trim()
+    const raw = lines[i].trim()
+    // Optional attributes from a Caustic Canvas preset are indexed by the
+    // preceding v record, not by the eventual reindexed GPU vertex.
+    if (raw.startsWith('# caustic-')) {
+      const [tag, ...values] = raw.slice(2).split(/\s+/)
+      if (tag === 'caustic-uv1' || tag === 'caustic-tangent') {
+        if (!positions.length || values.length !== (tag === 'caustic-uv1' ? 2 : 4)) invalid(line, 'Invalid preset vertex attributes.')
+        const isUV = tag === 'caustic-uv1'
+        const stream = isUV ? secondaryUVs : sourceTangents
+        if (!stream.length && vertices.length) {
+          const output = isUV ? outputUV1 : outputTangents
+          output.length = vertices.length / sceneVertexStride * (isUV ? 2 : 4)
+          output.fill(0)
+        }
+        stream[positions.length - 1] = values.map(n => coordinate(n, line))
+      } else if (tag === 'caustic-uv-mask') {
+        if (values.length !== 1 || !/^[0-3]$/.test(values[0])) invalid(line, 'Invalid texture coordinate mask.')
+        uvMask = Number(values[0])
+      }
+      continue
+    }
+    const record = raw.split('#', 1)[0].trim()
     if (!record) continue
     const [op, ...args] = record.split(/\s+/)
     switch (op) {
       case 'v': {
-        if (args.length !== 3 && !(args.length === 4 && coordinate(args[3], line) === 1)) {
-          invalid(line, 'Expected v x y z with optional unit weight.')
+        const hasColor = args.length === 6 || args.length === 7
+        const hasWeight = args.length === 4 || args.length === 7
+        if ((args.length !== 3 && !hasColor && !hasWeight) || (hasWeight && coordinate(args[3], line) !== 1)) {
+          invalid(line, 'Expected v x y z with optional unit weight and vertex RGB.')
         }
         // Validate geometry at the precision used by both the BVH and the GPU.
-        const [x, y, z] = args.map(value => Math.fround(coordinate(value, line)))
+        const [x, y, z] = args.slice(0, 3).map(value => Math.fround(coordinate(value, line)))
+        if (hasColor) {
+          const rgb = args.slice(-3).map(value => coordinate(value, line))
+          if (rgb.some(n => n < 0 || n > 1)) invalid(line, 'OBJ vertex colors must be in [0, 1].')
+          colors.set(positions.length, [rgb[0], rgb[1], rgb[2]])
+        }
         positions.push([x, y, z])
         break
       }
@@ -89,6 +122,7 @@ export function parseObjMesh(text: string): SceneMesh & { materialLibraries: str
         break
       case 'usemtl':
         material = args.join(' ').replace(/^"(.*)"$/, '$1') || undefined
+        uvMask = undefined
         break
       case 'vn': {
         if (args.length !== 3) invalid(line, 'Expected vn x y z.')
@@ -116,19 +150,24 @@ export function parseObjMesh(text: string): SceneMesh & { materialLibraries: str
           if (objectId > 0xffffff) invalid(line, 'Too many scene objects.')
           objects.set(name, objectId)
         }
-        const hasUV = corners.every(corner => corner.uv !== undefined)
+        const hasUV = uvMask === undefined ? corners.every(corner => corner.uv !== undefined) : uvMask !== 0
+        if (material && colors.size && corners.some(c => colors.has(c.position))) vertexColorMaterials.add(material)
         const last = draws.at(-1)
-        if (last && last.material === material && last.hasUV === hasUV) last.indexCount += 3
-        else draws.push({ firstIndex: indices.length, indexCount: 3, material, hasUV })
+        if (last && last.material === material && last.hasUV === hasUV && last.uvMask === uvMask) last.indexCount += 3
+        else draws.push({ firstIndex: indices.length, indexCount: 3, material, hasUV, uvMask })
         for (const { position, normal, uv } of corners) {
           const key = normal === undefined ? undefined : `${objectId}/${position}/${normal}/${uv ?? ''}`
           let index = key === undefined ? undefined : shared.get(key)
           if (index === undefined) {
             index = vertices.length / sceneVertexStride
+            const rgb = colors.get(position)
+            if (rgb) coloredVertices.add(index)
             vertices.push(...positions[position], ...(normal === undefined ? flat : normals[normal]),
-              ...defaultAlbedo, 0, objectId)
+              ...(rgb ?? defaultAlbedo), 0, objectId)
             if (uv !== undefined) uvs.push(...texcoords[uv])
             else uvs.push(0, 0)
+            if (secondaryUVs.length) outputUV1.push(...(secondaryUVs[position] ?? [0, 0]))
+            if (sourceTangents.length) outputTangents.push(...(sourceTangents[position] ?? [0, 0, 0, 0]))
             if (key !== undefined) shared.set(key, index)
           }
           indices.push(index)
@@ -139,7 +178,20 @@ export function parseObjMesh(text: string): SceneMesh & { materialLibraries: str
     }
   }
   if (!indices.length) throw new Error('OBJ contains no triangle faces.')
-  return { vertices: new Float32Array(vertices), indices: new Uint32Array(indices), draws, materialLibraries,
+  // RGB is a multiplier. An uncolored corner of a colored material is neutral.
+  for (const draw of draws) {
+    if (!draw.material || !vertexColorMaterials.has(draw.material)) continue
+    for (let j = draw.firstIndex; j < draw.firstIndex + draw.indexCount; j++) {
+      const vertex = indices[j]
+      if (!coloredVertices.has(vertex)) {
+        const rgb = vertex * sceneVertexStride + 6
+        vertices[rgb] = vertices[rgb + 1] = vertices[rgb + 2] = 1
+      }
+    }
+  }
+  return { vertices: new Float32Array(vertices), indices: new Uint32Array(indices), draws, materialLibraries, vertexColorMaterials,
+    uvs1: outputUV1.length ? new Float32Array(outputUV1) : undefined,
+    tangents: outputTangents.length ? new Float32Array(outputTangents) : undefined,
     uvs: texcoords.length ? new Float32Array(uvs) : undefined }
 }
 

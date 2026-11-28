@@ -27,8 +27,10 @@ export async function checkBeamVolume(device: GPUDevice, fixture: ForwardResult,
   const storage = (size: number) => device.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST })
   const rayBuffer = storage(rays.byteLength), hitBuffer = storage(hitWords.byteLength)
   const offsets = storage(columns * rows * 8)
-  const totals = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
-  const readback = device.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST })
+  const totals = device.createBuffer({ size: 48, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST })
+  const readback = device.createBuffer({ size: totals.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST })
+  const split = device.createTexture({ size: [32, 1], format: 'rgba8unorm',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST })
   const volume = createBeamVolume(device)
   const result = { ...fixture, beams: { lens, buffer: rayBuffer }, firstHits: { ...fixture.firstHits!, buffer: hitBuffer } }
   device.queue.writeBuffer(rayBuffer, 0, rays)
@@ -37,38 +39,39 @@ export async function checkBeamVolume(device: GPUDevice, fixture: ForwardResult,
     // Integrate two cross sections, split at x=0, independent of the path sampler.
     const module = device.createShaderModule({ code: `
       @group(0) @binding(0) var field: texture_3d<f32>;
-      @group(0) @binding(1) var<storage, read_write> sums: array<atomic<u32>, 4>;
+      @group(0) @binding(1) var<storage, read_write> sums: array<atomic<u32>, 12>;
       @compute @workgroup_size(64) fn measure(@builtin(local_invocation_index) lane: u32) {
         let size = textureDimensions(field);
-        var partial = array<f32, 4>();
+        var partial = array<vec3f, 4>();
         for (var i = lane; i < size.x * size.y; i += 64u) {
           let xy = vec2u(i % size.x, i / size.x);
           let side = select(0u, 1u, xy.x >= size.x / 2u);
           for (var k = 0u; k < 2u; k++) {
             let z = (2u * k + 1u) * size.z / 4u;
-            let value = textureLoad(field, vec3i(vec3u(xy, z)), 0).r;
+            let value = textureLoad(field, vec3i(vec3u(xy, z)), 0).rgb;
             partial[k * 2u + side] += value;
           }
         }
         // Quantize once per lane to keep the integration error independent of resolution.
         for (var k = 0u; k < 4u; k++) {
-          atomicAdd(&sums[k], u32(round(partial[k] * 1048576.0 / f32(size.x * size.y))));
+          let power = vec3u(round(partial[k] * (1048576.0 / f32(size.x * size.y))));
+          for (var channel = 0u; channel < 3u; channel++) { atomicAdd(&sums[k + channel * 4u], power[channel]); }
         }
       }` })
     const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'measure' } })
     const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [
       { binding: 0, resource: volume.textureView }, { binding: 1, resource: { buffer: totals } },
     ] })
-    async function measure() {
+    async function measure(filter?: GPUTextureView) {
       const encoder = device.createCommandEncoder()
-      volume.update(encoder, result, offsets, fixture.receiver.z)
+      volume.update(encoder, result, offsets, fixture.receiver.z, false, filter)
       encoder.clearBuffer(totals)
       const pass = encoder.beginComputePass()
       pass.setPipeline(pipeline)
       pass.setBindGroup(0, group)
       pass.dispatchWorkgroups(1)
       pass.end()
-      encoder.copyBufferToBuffer(totals, 0, readback, 0, 16)
+      encoder.copyBufferToBuffer(totals, 0, readback, 0, totals.size)
       device.queue.submit([encoder.finish()])
       await readback.mapAsync(GPUMapMode.READ)
       const data = new Uint32Array(readback.getMappedRange().slice(0))
@@ -85,6 +88,15 @@ export async function checkBeamVolume(device: GPUDevice, fixture: ForwardResult,
     if (farLeft > nearLeft * 0.04 || Math.abs(farRight - nearRight) > nearRight * 0.04) {
       throw new Error(`Incorrect beam termination: near ${nearLeft}/${nearRight}, far ${farLeft}/${farRight}.`)
     }
+    const splitColors = new Uint8Array(32 * 4)
+    for (let i = 0; i < 32; i++) splitColors.set(i < 16 ? [255, 0, 0, 255] : [0, 0, 255, 255], 4 * i)
+    device.queue.writeTexture({ texture: split }, splitColors, { bytesPerRow: 128 }, [32, 1])
+    const rgb = await measure(split.createView())
+    if (rgb[0] < 0.9 * expected || rgb[9] < 0.9 * expected || rgb[11] < 0.9 * expected ||
+        [rgb[1], rgb[2], rgb[3], ...rgb.slice(4, 9), rgb[10]].some(v => v > expected * 0.09)) {
+      throw new Error('Volume lost its source colors or leaked through the blocker: ' + rgb)
+    }
+    report('PASS red and blue light follow separate paths in air and terminate at the scene')
     // The same lens, now without an obstacle, emits a tilted parallel bundle.
     // Reversing its slope should carry the distant cross section to the opposite side.
     device.queue.writeBuffer(hitBuffer, 0, hitWords.fill(0))
@@ -121,6 +133,7 @@ export async function checkBeamVolume(device: GPUDevice, fixture: ForwardResult,
     if ((await measure()).some(v => v !== 0)) throw new Error('Light remained in the volume after rebuilding with zero flux.')
     report('PASS volume: injected flux, deflection, first-hit cutoff, missed rays and zero-flux rebuild')
   } finally {
+    split.destroy()
     volume.destroy()
     for (const buffer of [rayBuffer, hitBuffer, offsets, totals, readback]) buffer.destroy()
   }
@@ -137,8 +150,7 @@ async function checkCameraIntegral(device: GPUDevice, output: GPUBuffer, readbac
   function fillField(value: number, neighbourhood = value) {
     const data = new Uint8Array(4 * layers)
     for (let z = 0; z < layers; z++) {
-      data[z * 4] = value
-      data[z * 4 + 1] = neighbourhood
+      data.set([value, value, value, neighbourhood], z * 4)
     }
     device.queue.writeTexture({ texture: field }, data, { bytesPerRow: 4, rowsPerImage: 1 }, [1, 1, layers])
   }
@@ -151,9 +163,9 @@ async function checkCameraIntegral(device: GPUDevice, output: GPUBuffer, readbac
   const towardLens = mat4.scale(mat4.translation([0.03125, 0.025, receiverZ]), [0.125, 0.05, -1])
   const module = device.createShaderModule({ code: `
     @group(0) @binding(0) var fog: texture_2d<f32>;
-    @group(0) @binding(1) var<storage, read_write> output: array<vec2f, 2>;
+    @group(0) @binding(1) var<storage, read_write> output: array<vec4f, 2>;
     @compute @workgroup_size(2) fn readFog(@builtin(local_invocation_index) i: u32) {
-      output[i] = textureLoad(fog, vec2i(i32(i), 0), 0).rg;
+      output[i] = textureLoad(fog, vec2i(i32(i), 0), 0);
     }` })
   const pipeline = device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'readFog' } })
   const generatedBounds = beamVolumeBounds(narrow, narrow.receiver.z)
@@ -176,10 +188,10 @@ async function checkCameraIntegral(device: GPUDevice, output: GPUBuffer, readbac
     ] }))
     pass.dispatchWorkgroups(1)
     pass.end()
-    encoder.copyBufferToBuffer(output, 0, readback, 0, 16)
+    encoder.copyBufferToBuffer(output, 0, readback, 0, 32)
     device.queue.submit([encoder.finish()])
     await readback.mapAsync(GPUMapMode.READ)
-    const samples = new Float32Array(readback.getMappedRange().slice(0))
+    const samples = new Float32Array(readback.getMappedRange(0, 32).slice(0))
     readback.unmap()
     for (const value of samples) if (!Number.isFinite(value) || value < 0) throw new Error('Invalid scattering readback.')
     return samples
@@ -208,7 +220,7 @@ async function checkCameraIntegral(device: GPUDevice, output: GPUBuffer, readbac
         view[15] = 1
         const whole = await sample(view, 1, 0, narrowField)
         const clipped = await sample(view, 1, 0, narrowField, 1)
-        if (!(whole[0] > 0 && Math.abs(whole[0] - clipped[0]) < whole[0] * 0.06) || whole[2] || clipped[2]) {
+        if (!(whole[0] > 0 && Math.abs(whole[0] - clipped[0]) < whole[0] * 0.06) || whole[4] || clipped[4]) {
           throw new Error(`Aperture clipping changed the finite beam at axis ${axis}, sign ${sign}: ${whole} vs ${clipped}.`)
         }
       }
@@ -219,7 +231,7 @@ async function checkCameraIntegral(device: GPUDevice, output: GPUBuffer, readbac
     fillField(85)
     const uniform = await sample(fromLens)
     const layersRGBA = new Uint8Array(4 * layers)
-    for (let z = 1; z < layers; z += 3) layersRGBA[4 * z] = 255
+    for (let z = 1; z < layers; z += 3) layersRGBA.set([255, 255, 255, 0], 4 * z)
     device.queue.writeTexture({ texture: field }, layersRGBA, { bytesPerRow: 4, rowsPerImage: 1 }, [1, 1, layers])
     const layered = await sample(fromLens)
     if (!(uniform[0] > 0) || Math.abs(layered[0] - uniform[0]) > 0.05 * uniform[0]) {
@@ -227,7 +239,7 @@ async function checkCameraIntegral(device: GPUDevice, output: GPUBuffer, readbac
     }
     fillField(255)
     const outgoing = await sample(fromLens), returning = await sample(towardLens)
-    for (const i of [0, 2]) compareEqualPaths(outgoing[i], returning[i], 'refracted volume from opposite ends')
+    for (const i of [0, 4]) compareEqualPaths(outgoing[i], returning[i], 'refracted volume from opposite ends')
     // Orbit an ordinary point in the fan from above the floor. Compare the same
     // length of constant-fluence medium centered on that point at either pitch.
     const segment = 0.05
@@ -243,12 +255,12 @@ async function checkCameraIntegral(device: GPUDevice, output: GPUBuffer, readbac
     const nearRim = await sampleInFan(8), overhead = await sampleInFan(50)
     compareEqualPaths(nearRim[0], overhead[0], 'volume from the rim and above')
     const partial = await sample(towardLens, receiverZ / 2)
-    for (const i of [0, 2]) {
+    for (const i of [0, 4]) {
       if (!(partial[i] > 0 && partial[i] < returning[i])) throw new Error('Foreground depth did not shorten the light integral.')
-      if (Math.abs(partial[i + 1] - receiverZ / 2) > 0.0001) throw new Error('Wrong distance for scattering upsampling.')
+      if (Math.abs(partial[i + 3] - receiverZ / 2) > 0.0001) throw new Error('Wrong distance for scattering upsampling.')
     }
     const hidden = await sample(fromLens, inlet / 2)
-    if (hidden[0] || hidden[2]) throw new Error('Refracted light appeared behind a closer opaque surface.')
+    if (hidden[0] || hidden[4]) throw new Error('Refracted light appeared behind a closer opaque surface.')
 
     // Probe the same segment with fluence first below then above the reference.
     fillField(32)
@@ -265,15 +277,23 @@ async function checkCameraIntegral(device: GPUDevice, output: GPUBuffer, readbac
     if (!(ridge[0] > 1.1 * focused[0])) throw new Error('A narrow ridge and a uniform sheet of equal fluence had the same brightness.')
     fillField(0, 192)
     if ((await sampleInFan(50))[0] !== 0) throw new Error('A nearby bright sheet illuminated an empty voxel.')
+    // Place red in the first half and blue in the second. A camera ray through
+    // both layers must collect both colors, while a foreground hit clips blue.
+    for (let z = 0; z < layers; z++) layersRGBA.set(z < layers / 2 ? [255, 0, 0, 0] : [0, 0, 255, 0], 4 * z)
+    device.queue.writeTexture({ texture: field }, layersRGBA, { bytesPerRow: 4, rowsPerImage: 1 }, [1, 1, layers])
+    const mixed = await sample(fromLens), red = await sample(fromLens, inlet + receiverZ / 3)
+    compareEqualPaths(mixed[0], mixed[2], 'red and blue layers')
+    if (mixed[1] || !(red[0] > 0) || red[1] || red[2]) throw new Error('Color leaked across the opaque foreground.')
     fillField(0)
     if ((await sampleInFan(50))[0] !== 0) throw new Error('The reference flood illuminated empty air.')
     const inletHigh = await sample(fromLens, 1, 3), inletLow = await sample(towardLens, 1, 3)
     compareEqualPaths(inletHigh[0], inletLow[0], 'incident column from opposite ends')
-    if (inletHigh[2] || inletLow[2]) throw new Error('Incident light appeared outside its aperture.')
+    if (inletHigh[0] !== inletHigh[1] || inletHigh[1] !== inletHigh[2]) throw new Error('The incident column should be white.')
+    if (inletHigh[4] || inletLow[4]) throw new Error('Incident light appeared outside its aperture.')
     const occludedInlet = await sample(towardLens, receiverZ, 3)
-    if (occludedInlet[0] || occludedInlet[2]) throw new Error('Incident light leaked through an opaque surface.')
+    if (occludedInlet[0] || occludedInlet[4]) throw new Error('Incident light leaked through an opaque surface.')
     const off = await sample(towardLens)
-    if (off[0] || off[2]) throw new Error('Scattering remained with zero beam flux and the lamp off.')
+    if (off[0] || off[4]) throw new Error('Scattering remained with zero beam flux and the lamp off.')
   } finally {
     march.destroy()
     depth.destroy()

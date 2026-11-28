@@ -22,12 +22,32 @@
           <select id="bundled-scene" aria-label="Scene" disabled>
             <option value="" hidden>Choose a scene</option>
           </select>
-          <button id="import-obj" class="quiet" type="button" title="Open an OBJ with its MTL and textures" disabled>Open OBJ</button>
-          <input id="obj-file" type="file" accept=".obj,.mtl,.png,.jpg,.jpeg,.webp" multiple hidden />
-          <button id="import-folder" class="quiet" type="button" title="Open a folder with the OBJ, MTL and Base Color images" disabled>Open folder</button>
+          <button id="import-model" class="quiet" type="button" title="Open a GLB, glTF or OBJ with its companion files" disabled>Open model</button>
+          <input id="model-files" type="file" accept=".glb,.gltf,.bin,.obj,.mtl,.png,.jpg,.jpeg,.webp,.avif,.bmp" multiple hidden />
+          <button id="import-folder" class="quiet" type="button" title="Open a folder containing one model and its textures" disabled>Open folder</button>
           <input id="asset-folder" type="file" webkitdirectory multiple hidden />
         </div>
+        <button id="export-image" type="button" aria-haspopup="dialog" aria-controls="export-dialog" disabled>Export</button>
       </header>
+
+      <dialog id="export-dialog" aria-label="Export PNG">
+        <form id="export-form">
+          <label class="export-field" for="export-size">
+            <span>Image Size</span>
+            <select id="export-size" autofocus>
+              <option value="1024">1024 px</option>
+              <option value="2048" selected>2048 px</option>
+              <option value="4096">4096 px</option>
+            </select>
+          </label>
+          <p id="export-error" role="alert"></p>
+          <div class="export-actions">
+            <span id="export-spinner" role="progressbar" aria-label="Exporting PNG" hidden></span>
+            <button id="export-cancel" type="button" class="quiet">Cancel</button>
+            <button id="export-submit" type="submit">Export PNG</button>
+          </div>
+        </form>
+      </dialog>
 
       <aside id="design-panel">
         <div class="panel-head">
@@ -35,6 +55,16 @@
         </div>
 
         <canvas id="target-canvas" aria-label="Light pattern drawing pad"></canvas>
+
+        <div class="color-tools">
+          <div id="brush-swatches" role="group" aria-label="Light colors"></div>
+          <label class="custom-color" title="Choose a custom light color">
+            <input id="brush-color" type="color" value="#ffffff" aria-label="Custom light color" />
+            <span aria-hidden="true">+</span>
+          </label>
+          <button id="recolor" type="button" aria-pressed="false" disabled
+            title="Change the color of existing strokes while preserving their shape">Recolor</button>
+        </div>
 
         <div class="tools">
           <label class="brush" title="Brush size">
@@ -60,20 +90,38 @@
       </aside>
 
       <div id="view-controls">
+        <output id="debug-legend" for="beam-view" hidden></output>
         <div id="view-switch" role="group" aria-label="View">
           <button type="button" data-view="lit" aria-pressed="true">Room</button>
           <button type="button" data-view="debug" aria-pressed="false">Debug</button>
         </div>
-        <label id="room-options" title="Show the prism and light beams in the room">
-          Glass &amp; beams
-          <input type="checkbox" role="switch" id="light-paths" aria-controls="gpu-canvas" checked disabled />
-        </label>
+        <fieldset id="room-options" aria-label="Room settings" disabled>
+          <label title="Switch between full materials and base color under the same light">
+            Materials
+            <input type="checkbox" role="switch" id="room-materials" aria-controls="gpu-canvas" checked />
+          </label>
+          <label title="Show the prism and light beams in the room">
+            Glass &amp; beams
+            <input type="checkbox" role="switch" id="light-paths" aria-controls="gpu-canvas" checked />
+          </label>
+        </fieldset>
         <div id="debug-control" hidden>
           <select id="beam-view" aria-label="Debug view">
-            <option value="irradiance">Surface irradiance</option>
-            <option value="candidates">Splat candidates</option>
-            <option value="normals">Surface normals</option>
-            <option value="albedo">Base color</option>
+            <optgroup label="Lighting">
+              <option value="irradiance">Surface irradiance</option>
+              <option value="candidates">Splat candidates</option>
+            </optgroup>
+            <optgroup label="Materials">
+              <option value="albedo">Base color</option>
+              <option value="normal-map">Normal map</option>
+              <option value="normals">Shading normals</option>
+              <option value="geometric-normals">Face normals</option>
+              <option value="roughness">Roughness</option>
+              <option value="metallic">Metallic</option>
+              <option value="occlusion">Ambient occlusion</option>
+              <option value="emissive">Emission</option>
+              <option value="map-coverage">Map coverage</option>
+            </optgroup>
           </select>
         </div>
       </div>
@@ -81,6 +129,7 @@
       <footer id="footnote">
         <p id="camera-help">Drag to look around · Scroll to zoom · Double-click to reset</p>
         <p id="scene-status" role="status"></p>
+        <button id="restore-textures" type="button" title="Download and cache the missing original Poly Haven textures" hidden>Load original maps</button>
         <a id="scene-credit" target="_blank" rel="noopener" hidden></a>
       </footer>
 

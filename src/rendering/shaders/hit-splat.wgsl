@@ -1,5 +1,4 @@
 @group(2) @binding(0) var<storage, read> triangles: array<Triangle>;
-@group(0) @binding(5) var sceneObject: texture_2d<u32>;
 @group(2) @binding(3) var<storage, read> cachedHits: array<Hit>;
 
 struct Splat {
@@ -8,7 +7,7 @@ struct Splat {
   @location(1) @interpolate(flat) b: vec2f,
   @location(2) @interpolate(flat) c: vec2f,
   @location(3) @interpolate(flat) plane: vec4f,
-  @location(4) @interpolate(flat) irradiance: f32,
+  @location(4) @interpolate(flat) irradiance: vec3f,
   @location(5) @interpolate(flat) objectId: u32,
   @location(6) @interpolate(flat) tinyArea: f32,
   @location(7) @interpolate(flat) d: vec2f,
@@ -21,8 +20,8 @@ fn splatVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u3
   let hit = cachedHits[face];
   if (hit.trianglePlusOne == 0u) { return out; }
   let tri = triangles[hit.trianglePlusOne - 1u];
-  let n = normalize(cross(tri.b - tri.a, tri.c - tri.a));
   let ray = beams[face];
+  let n = receivingNormal(tri, ray.xyz);
   let incidence = -dot(n, ray.xyz);
   if (!(incidence > 1e-7)) { return out; }
   let ids = sourceIds(face);
@@ -31,7 +30,12 @@ fn splatVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u3
   let center = centroid + hit.t * ray.xyz;
   let perpArea = 0.5 * abs(dot(cross(source[1]-source[0], source[2]-source[0]), ray.xyz));
   if (!(perpArea > 0.0)) { return out; }
-  out.irradiance = ray.w * incidence / perpArea;
+  var transmission = vec3f(1);
+  if (hasApertureColor() && frame.mode == 0u) {
+    let texel = apertureTexel(centroid.xy, frame.aperture, textureDimensions(apertureFilter));
+    transmission = textureLoad(apertureFilter, texel, 0).rgb;
+  }
+  out.irradiance = (ray.w * incidence / perpArea) * transmission;
   out.objectId = tri.objectId;
   out.plane = vec4f(n, -dot(n, tri.a));
 
@@ -78,7 +82,7 @@ fn splatVS(@builtin(vertex_index) vertex: u32, @builtin(instance_index) face: u3
 
 @fragment
 fn splatFS(input: Splat) -> @location(0) vec4f {
-  if (frame.mode == 1u) { return vec4f(0,1,0,0); }
+  if (frame.mode == 1u) { return vec4f(0,0,0,1); }
   let pixel = vec2i(input.position.xy);
   let visible = textureLoad(sceneObject, pixel, 0);
   if (visible.r != input.objectId) { discard; }
@@ -101,5 +105,5 @@ fn splatFS(input: Splat) -> @location(0) vec4f {
       coverage += pixelCoverage(input.a-origin, input.c-origin, input.d-origin);
     }
   }
-  return vec4f(input.irradiance * coverage, 1, 0, 0);
+  return vec4f(input.irradiance * coverage, 1);
 }

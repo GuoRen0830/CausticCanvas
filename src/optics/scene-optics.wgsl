@@ -34,7 +34,7 @@ fn surfaceCorner(v: Dual3, d: Dual3, n: vec3f, a: vec3f, incidence: vec4f) -> Du
 struct SceneSpot { polygon: Footprint, density: vec4f, normal: vec3f }
 fn sceneSpot(face: u32, tri: Triangle, derivatives: bool) -> SceneSpot {
   var spot: SceneSpot;
-  let n = normalize(cross(tri.b-tri.a,tri.c-tri.a));
+  let n = receivingNormal(tri, vec3f(0,0,1)); // Facing the top-down painting view.
   if !(n.z < 0) { return spot; }
   let ids = indices(face);
   let a = vertex(ids.x, vec3f(1,0,0));
@@ -68,7 +68,7 @@ fn sameSurface(xy: vec2u, facePlusOne: u32, tri: Triangle, n: vec3f) -> bool {
   if visible.trianglePlusOne == 0u { return false; }
   let other = triangles[visible.trianglePlusOne-1u];
   if other.objectId != tri.objectId { return false; }
-  let otherNormal = normalize(cross(other.b-other.a,other.c-other.a));
+  let otherNormal = receivingNormal(other, vec3f(0,0,1));
   if dot(n,otherNormal) < 0.85 { return false; }
   let step = p.receiverSize/vec2f(p.image);
   let pos = vec3f((vec2f(xy)+0.5)*step-0.5*p.receiverSize, visible.depth);

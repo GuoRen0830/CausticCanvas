@@ -19,9 +19,9 @@ export function buildDesignView(mesh: SceneMesh, receiver: ReceiverPlane) {
     const ux = vertices[base + 4] - ax, uy = vertices[base + 5] - ay, uz = vertices[base + 6] - az
     const vx = vertices[base + 8] - ax, vy = vertices[base + 9] - ay, vz = vertices[base + 10] - az
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx
-    // Same single-sided convention as the scene G-buffer.
-    if (nz >= 0) continue
-    const area = pixelArea * Math.hypot(nx, ny, nz) / -nz
+    const doubleSided = bvh.triangles[base + 11] !== 0
+    if (nz === 0 || (nz > 0 && !doubleSided)) continue
+    const area = pixelArea * Math.hypot(nx, ny, nz) / Math.abs(nz)
     const x0 = Math.max(0, Math.ceil(col(ax + Math.min(0, ux, vx))))
     const x1 = Math.min(width - 1, Math.floor(col(ax + Math.max(0, ux, vx))))
     const y0 = Math.max(0, Math.ceil(row(ay + Math.min(0, uy, vy))))

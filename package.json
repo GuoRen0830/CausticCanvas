@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prepare:scenes": "node scripts/prepare-preview-scenes.mjs",
+    "restore:materials": "node scripts/restore-material-originals.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },

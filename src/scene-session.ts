@@ -1,15 +1,17 @@
 import type { Mat4 } from 'wgpu-matrix'
 import { config, sceneLamp } from './config'
-import type { AppState, ForwardModel, LensOptimizer, ReceiverPlane, TargetImage } from './contracts'
+import type { AppState, ForwardModel, ForwardResult, LensOptimizer, ReceiverPlane, TargetImage } from './contracts'
 import { createFlatLens, createLens } from './geometry/lens-mesh'
 import type { DesignView } from './optics/design-view'
 import { createForwardModel } from './optics/forward-model'
+import { createApertureColor } from './optics/aperture-color'
 import { createLensOptimizer } from './optimization/lens-optimizer'
 import { uniformIlluminationHeights } from './optimization/uniform-illumination'
 import { createBeamRenderer, type BeamView } from './rendering/beam-renderer'
 import { createCausticDisplay } from './rendering/caustic-display'
 import type { SceneGeometry } from './rendering/scene-mesh'
 import { createSceneRenderer } from './rendering/scene-renderer'
+import type { renderRoomExport } from './rendering/room-export'
 import { createSimulation } from './simulation'
 
 // A scene owns its lens, training state and draw resources. A failed replacement
@@ -31,10 +33,12 @@ export async function createSceneSession(
   let scene: Awaited<ReturnType<typeof createSceneRenderer>> | undefined
   let beams: ReturnType<typeof createBeamRenderer> | undefined
   let display: ReturnType<typeof createCausticDisplay> | undefined
+  let apertureColor: ReturnType<typeof createApertureColor> | undefined
 
   function destroy() {
     display?.destroy()
     beams?.destroy()
+    apertureColor?.destroy()
     scene?.destroy()
     optimizer?.destroy()
     forward?.destroy()
@@ -63,9 +67,40 @@ export async function createSceneSession(
     const simulation = createSimulation(state, forward, optimizer ?? undefined)
     const initial = device.createCommandEncoder({ label: 'Initial scene evaluation' })
     let result = simulation.encode(initial).result
-    await display.prepare(result.caustic.kind)
+    await Promise.all([display.prepare(result.caustic.kind), display.prepare('rgb')])
     display.setImage(result.caustic)
     device.queue.submit([initial.finish()])
+
+    let calibration: { result: ForwardResult; target: TargetImage; shapeVersion: number; colorVersion?: number } | undefined
+    let filterRevision = 0, lastCalibration = -Infinity
+    let colorFilter: GPUTextureView | undefined
+    let lightPathsVisible = true
+    let materialsEnabled = true
+    let roomExposure: number = config.rendering.causticExposure
+    let resultMayLagLens = false
+    // The forward buffers may be reused. Recompute from the current evaluation,
+    // and keep both color textures on the GPU between updates and during camera motion.
+    function updateColor(encoder: GPUCommandEncoder, target: TargetImage | null, training: boolean, evaluated: boolean) {
+      if (!target?.colors) {
+        if (calibration) beams!.setColorFilter(undefined)
+        colorFilter = undefined
+        if (calibration || evaluated) display!.setImage(result.caustic)
+        calibration = undefined
+        return
+      }
+      const now = performance.now()
+      if (calibration?.target === target && calibration.shapeVersion === target.version &&
+          calibration.colorVersion === target.colorVersion) {
+        if (calibration.result === result || (training && now - lastCalibration < 100)) return
+      }
+      apertureColor ??= createApertureColor(device)
+      const { filter, image } = apertureColor.update(encoder, result, target, designView)
+      colorFilter = filter
+      beams!.setColorFilter(filter, ++filterRevision)
+      display!.setImage({ kind: 'rgb', view: image, width: receiver.width, height: receiver.height })
+      calibration = { result, target, shapeVersion: target.version, colorVersion: target.colorVersion }
+      lastCalibration = now
+    }
 
     // The panel starts exposed for the floodlit scene. Once there is a drawing,
     // expose for the irradiance a fully painted pixel would get if all light
@@ -85,16 +120,57 @@ export async function createSceneSession(
       display!.setExposure(drawing ? config.rendering.drawingExposure * paintedArea / power : config.rendering.causticExposure)
       // In the room, keep the brightest strokes just below white so the
       // surface under the light still shows; the initial illumination uses 1.
-      beams!.setExposure(drawing ? Math.min(1, config.rendering.roomExposure * paintedArea / power) : 1)
+      roomExposure = drawing ? Math.min(1, config.rendering.roomExposure * paintedArea / power) : 1
+      beams!.setExposure(roomExposure)
     }
 
     return {
       state, canOptimize: !!optimizer, destroy,
+      replaceMaterials: scene.replaceMaterials,
+      mapCoverage: scene.mapCoverage,
       setTarget(target: TargetImage | null) {
+        if (target?.colors && target.colors.length !== 3 * target.values.length) {
+          throw new Error('Brush colors must have one RGB triplet per target pixel.')
+        }
         state.target = target?.values.some((value, i) => value > 0 && designView.surfaceAreas[i] > 0) ? target : null
         return state.target !== null
       },
-      setLightPathsVisible(value: boolean) { beams!.setLightPathsVisible(value) },
+      setLightPathsVisible(value: boolean) {
+        lightPathsVisible = value
+        beams!.setLightPathsVisible(value)
+      },
+      setMaterialsEnabled(value: boolean) {
+        materialsEnabled = value
+      },
+      async exportImage(request: Parameters<typeof renderRoomExport>[2]) {
+        const { renderRoomExport } = await import('./rendering/room-export')
+        request.signal.throwIfAborted()
+        // Training can show the previous iteration's beams. Evaluate the
+        // current lens and its RGB filter together, without taking an Adam step.
+        device.pushErrorScope('out-of-memory')
+        device.pushErrorScope('validation')
+        try {
+          const encoder = device.createCommandEncoder({ label: 'Evaluate lens for export' })
+          const restoreInitialLens = !state.target && state.lens.heightBuffer !== initialLens.heightBuffer
+          if (restoreInitialLens) state.lens = initialLens
+          const evaluate = resultMayLagLens || restoreInitialLens
+          if (evaluate) result = simulation.encode(encoder).result
+          exposeFor(state.target)
+          updateColor(encoder, state.target, false, evaluate)
+          device.queue.submit([encoder.finish()])
+          await device.queue.onSubmittedWorkDone()
+          resultMayLagLens = false
+        } finally {
+          const [invalid, memory] = await Promise.all([device.popErrorScope(), device.popErrorScope()])
+          if (!request.signal.aborted && (invalid || memory)) throw new Error((invalid || memory)!.message)
+        }
+        request.signal.throwIfAborted()
+        return renderRoomExport(device, {
+          geometry, opticalToWorld, result, scene: scene!, exposure: roomExposure,
+          environmentLight: config.rendering.environmentLight, incidentIrradiance: state.optics.incidentIrradiance,
+          relativeIOR: state.optics.lensIOR / state.optics.outsideIOR, colorFilter, lightPathsVisible, materialsEnabled,
+        }, request)
+      },
       render(encoder: GPUCommandEncoder, output: GPUTexture, preview: GPUTexture, vp: Mat4,
         mode: BeamView, steps: number) {
         optimizer?.setTarget(state.target)
@@ -102,16 +178,18 @@ export async function createSceneSession(
         let done = false
         const restoreInitialLens = !state.target && state.lens.heightBuffer !== initialLens.heightBuffer
         if (restoreInitialLens) state.lens = initialLens
-        if (restoreInitialLens || (state.target && steps > 0)) {
+        const evaluated = restoreInitialLens || (!!state.target && steps > 0)
+        if (evaluated) {
           const batch = simulation.encode(encoder, state.target ? steps : 0)
           result = batch.result
           done = batch.done
-          display!.setImage(result.caustic)
+          resultMayLagLens = !!state.target && steps > 0 && !done
         }
+        const training = !!state.target && steps > 0 && !done
+        updateColor(encoder, state.target, training, evaluated)
         beams!.setReferenceIrradiance(state.optics.incidentIrradiance)
         scene!.update(vp)
-        beams!.render(encoder, output, vp, mode, result, scene!.draw,
-          !!state.target && steps > 0 && !done)
+        beams!.render(encoder, output, vp, mode, result, scene!.draw, training, materialsEnabled)
         const pass = encoder.beginRenderPass({ label: 'Caustic preview', colorAttachments: [{
           view: preview.createView(), clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store',
         }] })

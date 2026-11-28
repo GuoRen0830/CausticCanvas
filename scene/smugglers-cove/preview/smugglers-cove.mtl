@@ -1,0 +1,1336 @@
+newmtl material-0
+Kd 1 0.98 0.94
+# caustic-vertex-color 1
+# caustic-vertex-wetness 0.65 0.173
+Pr 0.95
+# textures/base-color-0.jpg <- coast_sand_01_diff_1k.jpg
+map_Kd textures/base-color-0.jpg
+# textures/normal-0.png <- sand-normal.png
+norm -bm 1 textures/normal-0.png
+# textures/roughness-0.png <- sand-roughness.png
+map_Pr textures/roughness-0.png
+# textures/occlusion-0.png <- sand-ao.png
+map_AO -imfchan r textures/occlusion-0.png
+
+newmtl material-1
+Kd 1 1 1
+# caustic-vertex-color 0
+Pr 0.22
+# textures/base-color-1.png <- tide-color.png
+map_Kd -clamp on textures/base-color-1.png
+# textures/normal-1.png <- tide-normal.png
+norm -clamp on textures/normal-1.png
+# textures/roughness-1.png <- water-roughness.png
+map_Pr -clamp on textures/roughness-1.png
+
+newmtl material-2
+Kd 0.17 0.16 0.12
+# caustic-vertex-color 0
+Pr 0.94
+map_Kd textures/base-color-0.jpg
+norm -bm 1 textures/normal-0.png
+map_Pr textures/roughness-0.png
+map_AO -imfchan r textures/occlusion-0.png
+
+newmtl material-3
+Kd 0.18 0.23 0.1
+# caustic-vertex-color 0
+Pr 0.82
+# textures/normal-2.png <- grass-normal.png
+norm -bm 1 textures/normal-2.png
+# textures/roughness-2.png <- grass-roughness.png
+map_Pr textures/roughness-2.png
+
+newmtl material-4
+Kd 0.29 0.33 0.18
+# caustic-vertex-color 0
+Pr 0.82
+norm -bm 1 textures/normal-2.png
+map_Pr textures/roughness-2.png
+
+newmtl material-5
+Kd 0.42 0.36 0.18
+# caustic-vertex-color 0
+Pr 0.9
+norm -bm 1 textures/normal-2.png
+map_Pr textures/roughness-2.png
+
+newmtl material-6
+Kd 1 1 1
+# caustic-vertex-color 0
+# caustic-double-sided 1
+Pr 0.77
+Pm 0
+# caustic-texture-sampling map {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# caustic-texture-sampling normalMap {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# textures/base-color-2.jpg <- rock-shore-color.jpg
+map_Kd textures/base-color-2.jpg
+# textures/normal-3.png <- reef-scan-normal.png
+norm -bm 1 textures/normal-3.png
+# caustic-normal-y-sign -1
+# textures/roughness-3.png <- reef-roughness.png
+map_Pr textures/roughness-3.png
+
+newmtl material-7
+Kd 0.28 0.27 0.23
+# caustic-vertex-color 0
+Pr 0.96
+# textures/base-color-3.png <- quay-limestone.png
+map_Kd textures/base-color-3.png
+# textures/normal-4.png <- stone-normal.png
+norm -bm 1 textures/normal-4.png
+# textures/roughness-4.png <- quay-stone-roughness.png
+map_Pr textures/roughness-4.png
+
+newmtl material-8
+Kd 0.53 0.53 0.46
+# caustic-vertex-color 0
+Pr 0.9
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-9
+Kd 0.62 0.53 0.43
+# caustic-vertex-color 0
+Pr 0.93
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-10
+Kd 0.59 0.52 0.39
+# caustic-vertex-color 0
+Pr 0.97
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-11
+Kd 0.67 0.64 0.57
+# caustic-vertex-color 0
+Pr 0.7
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-12
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+# textures/normal-5.png <- fittings-normal.png
+norm -bm 1 textures/normal-5.png
+# textures/metallic-roughness-0.png <- fittings-mr.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-13
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-14
+Kd 0.245 0.325 0.31
+# caustic-vertex-color 0
+Pr 0.63
+Pm 0.41
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-15
+Kd 0.39 0.26 0.13
+# caustic-vertex-color 0
+Pr 0.72
+# textures/base-color-4.png <- quay-timber.png
+map_Kd textures/base-color-4.png
+# textures/normal-6.png <- timber-normal.png
+norm -bm 1 textures/normal-6.png
+# textures/roughness-5.png <- timber-roughness.png
+map_Pr textures/roughness-5.png
+
+newmtl material-16
+Kd 0.63 0.45 0.26
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-17
+Kd 0.53 0.4 0.24
+# caustic-vertex-color 0
+Pr 0.95
+# textures/normal-7.png <- rope-normal.png
+norm -bm 1 textures/normal-7.png
+# textures/roughness-6.png <- rope-roughness.png
+map_Pr textures/roughness-6.png
+
+newmtl material-18
+Kd 0.62 0.31 0.13
+# caustic-vertex-color 0
+Pr 0.6
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-19
+Kd 0.105 0.255 0.275
+# caustic-vertex-color 0
+Pr 0.53
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-20
+Kd 0.22 0.38 0.42
+# caustic-vertex-color 0
+Pr 0.27
+# textures/normal-8.png <- fish-normal.png
+norm -bm 1 textures/normal-8.png
+# textures/roughness-7.png <- fish-roughness.png
+map_Pr textures/roughness-7.png
+
+newmtl material-21
+Kd 0.78 0.83 0.76
+# caustic-vertex-color 0
+Pr 0.24
+norm -bm 1 textures/normal-8.png
+map_Pr textures/roughness-7.png
+
+newmtl material-22
+Kd 0.39 0.26 0.13
+# caustic-vertex-color 0
+Pr 0.72
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-23
+Kd 0.63 0.45 0.26
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-24
+Kd 0.53 0.4 0.24
+# caustic-vertex-color 0
+Pr 0.95
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-25
+Kd 0.62 0.31 0.13
+# caustic-vertex-color 0
+Pr 0.6
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-26
+Kd 0.59 0.091 0.04
+# caustic-vertex-color 0
+Pr 0.36
+# textures/normal-9.png <- enamel-normal.png
+norm -bm 1 textures/normal-9.png
+# textures/roughness-8.png <- enamel-roughness.png
+map_Pr textures/roughness-8.png
+
+newmtl material-27
+Kd 0.82 0.7 0.48
+# caustic-vertex-color 0
+Pr 0.45
+norm -bm 1 textures/normal-9.png
+map_Pr textures/roughness-8.png
+
+newmtl material-28
+Kd 0.53 0.4 0.24
+# caustic-vertex-color 0
+Pr 0.95
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-29
+Kd 0.43 0.237 0.099
+# caustic-vertex-color 0
+Pr 0.67
+# textures/normal-10.png <- cork-normal.png
+norm -bm 1 textures/normal-10.png
+# textures/roughness-9.png <- cork-roughness.png
+map_Pr textures/roughness-9.png
+
+newmtl material-30
+Kd 0.39 0.26 0.13
+# caustic-vertex-color 0
+Pr 0.72
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-31
+Kd 0.63 0.45 0.26
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-32
+Kd 0.62 0.31 0.13
+# caustic-vertex-color 0
+Pr 0.6
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-33
+Kd 0.67 0.57 0.42
+# caustic-vertex-color 0
+Pr 0.88
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-34
+Kd 0.105 0.255 0.275
+# caustic-vertex-color 0
+Pr 0.53
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-35
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-36
+Kd 0.51 0.186 0.092
+# caustic-vertex-color 0
+Pr 0.85
+# textures/normal-11.png <- fired-clay-normal.png
+norm -bm 1 textures/normal-11.png
+# textures/roughness-10.png <- fired-clay-roughness.png
+map_Pr textures/roughness-10.png
+
+newmtl material-37
+Kd 0.67 0.271 0.133
+# caustic-vertex-color 0
+Pr 0.79
+norm -bm 1 textures/normal-11.png
+map_Pr textures/roughness-10.png
+
+newmtl material-38
+Kd 0.53 0.4 0.24
+# caustic-vertex-color 0
+Pr 0.95
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-39
+Kd 0.22 0.38 0.42
+# caustic-vertex-color 0
+Pr 0.27
+norm -bm 1 textures/normal-8.png
+map_Pr textures/roughness-7.png
+
+newmtl material-40
+Kd 0.78 0.83 0.76
+# caustic-vertex-color 0
+Pr 0.24
+norm -bm 1 textures/normal-8.png
+map_Pr textures/roughness-7.png
+
+newmtl material-41
+Kd 0.76 0.46 0.18
+# caustic-vertex-color 0
+Pr 0.35
+Pm 0.79
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-42
+Kd 0.95 0.87 0.67
+# caustic-vertex-color 0
+Pr 0.46
+norm -bm 1 textures/normal-9.png
+map_Pr textures/roughness-8.png
+
+newmtl material-43
+Kd 0.17 0.35 0.56
+# caustic-vertex-color 0
+Pr 0.91
+# textures/base-color-5.png <- market-linen.png
+map_Kd textures/base-color-5.png
+# textures/normal-12.png <- linen-normal.png
+norm -bm 1 textures/normal-12.png
+# textures/roughness-11.png <- linen-roughness.png
+map_Pr textures/roughness-11.png
+
+newmtl material-44
+Kd 0.86 0.43 0.105
+# caustic-vertex-color 0
+Pr 0.57
+norm -bm 1 textures/normal-9.png
+map_Pr textures/roughness-8.png
+
+newmtl material-45
+Kd 0.94 0.82 0.6
+# caustic-vertex-color 0
+Pr 0.93
+map_Kd textures/base-color-5.png
+norm -bm 1 textures/normal-12.png
+map_Pr textures/roughness-11.png
+
+newmtl material-46
+Kd 0.15 0.41 0.43
+# caustic-vertex-color 0
+Pr 0.23
+norm -bm 1 textures/normal-9.png
+map_Pr textures/roughness-8.png
+
+newmtl material-47
+Kd 0.72 0.2 0.112
+# caustic-vertex-color 0
+Pr 0.9
+map_Kd textures/base-color-5.png
+norm -bm 1 textures/normal-12.png
+map_Pr textures/roughness-11.png
+
+newmtl material-48
+Kd 0.81 0.39 0.26
+# caustic-vertex-color 0
+Pr 0.56
+# textures/normal-13.png <- shell-normal.png
+norm -bm 1 textures/normal-13.png
+# textures/roughness-12.png <- shell-roughness.png
+map_Pr textures/roughness-12.png
+
+newmtl material-49
+Kd 0.9 0.83 0.73
+# caustic-vertex-color 0
+Pr 0.24
+norm -bm 1 textures/normal-13.png
+map_Pr textures/roughness-12.png
+
+newmtl material-50
+Kd 0.27 0.35 0.35
+# caustic-vertex-color 0
+Pr 0.49
+Pm 0.7
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-51
+Kd 0.74 0.49 0.23
+# caustic-vertex-color 0
+Pr 0.58
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-52
+Kd 0.39 0.26 0.13
+# caustic-vertex-color 0
+Pr 0.72
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-53
+Kd 0.63 0.45 0.26
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-54
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-55
+Kd 0.105 0.255 0.275
+# caustic-vertex-color 0
+Pr 0.53
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-56
+Kd 0.53 0.4 0.24
+# caustic-vertex-color 0
+Pr 0.95
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-57
+Kd 0.245 0.325 0.31
+# caustic-vertex-color 0
+Pr 0.63
+Pm 0.41
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-58
+Kd 0.27 0.258 0.15
+# caustic-vertex-color 0
+Pr 0.84
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-59
+Kd 0.27 0.35 0.35
+# caustic-vertex-color 0
+Pr 0.49
+Pm 0.7
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-60
+Kd 0.28 0.27 0.23
+# caustic-vertex-color 0
+Pr 0.96
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-61
+Kd 0.31 0.35 0.29
+# caustic-vertex-color 0
+Pr 0.4
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-62
+Kd 0.59 0.52 0.39
+# caustic-vertex-color 0
+Pr 0.97
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-63
+Kd 0.53 0.53 0.46
+# caustic-vertex-color 0
+Pr 0.9
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-64
+Kd 0.62 0.53 0.43
+# caustic-vertex-color 0
+Pr 0.93
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-65
+Kd 0.67 0.64 0.57
+# caustic-vertex-color 0
+Pr 0.7
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-66
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-67
+Kd 0.44 0.45 0.41
+# caustic-vertex-color 0
+Pr 0.81
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-68
+Kd 0.39 0.26 0.13
+# caustic-vertex-color 0
+Pr 0.72
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-69
+Kd 0.63 0.45 0.26
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-70
+Kd 0.53 0.4 0.24
+# caustic-vertex-color 0
+Pr 0.95
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-71
+Kd 0.27 0.35 0.35
+# caustic-vertex-color 0
+Pr 0.49
+Pm 0.7
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-72
+Kd 0.105 0.255 0.275
+# caustic-vertex-color 0
+Pr 0.53
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-73
+Kd 0.92 0.85 0.68
+# caustic-vertex-color 0
+Pr 0.41
+norm -bm 1 textures/normal-9.png
+map_Pr textures/roughness-8.png
+
+newmtl material-74
+Kd 0.59 0.105 0.063
+# caustic-vertex-color 0
+Pr 0.39
+norm -bm 1 textures/normal-9.png
+map_Pr textures/roughness-8.png
+
+newmtl material-75
+Kd 0.105 0.29 0.55
+# caustic-vertex-color 0
+Pr 0.83
+# textures/base-color-6.png <- lug-sailcloth.png
+map_Kd textures/base-color-6.png
+# textures/normal-14.png <- sailcloth-normal.png
+norm -bm 1 textures/normal-14.png
+# textures/roughness-13.png <- sailcloth-roughness.png
+map_Pr textures/roughness-13.png
+
+newmtl material-76
+Kd 0.96 0.82 0.52
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-77
+Kd 0.79 0.58 0.25
+# caustic-vertex-color 0
+Pr 0.24
+Pm 0.96
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-78
+Kd 0.17 0.39 0.34
+# caustic-vertex-color 0
+Pr 0.61
+Pm 0.31
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-79
+Kd 0.76 0.6 0.3
+# caustic-vertex-color 0
+Pr 0.16
+# textures/normal-15.png <- glass-normal.png
+norm -bm 1 textures/normal-15.png
+# textures/roughness-14.png <- glass-roughness.png
+map_Pr textures/roughness-14.png
+
+newmtl material-80
+Kd 0.245 0.325 0.31
+# caustic-vertex-color 0
+Pr 0.63
+Pm 0.41
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-81
+Kd 1 0.78 0.38
+# caustic-vertex-color 0
+Pr 0.15
+norm -bm 1 textures/normal-15.png
+map_Pr textures/roughness-14.png
+
+newmtl material-82
+Kd 0.39 0.26 0.13
+# caustic-vertex-color 0
+Pr 0.72
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-83
+Kd 0.055 0.22 0.235
+# caustic-vertex-color 0
+Pr 0.35
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-84
+Kd 0.08 0.3 0.29
+# caustic-vertex-color 0
+Pr 0.35
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-85
+Kd 0.62 0.31 0.13
+# caustic-vertex-color 0
+Pr 0.6
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-86
+Kd 0.9 0.77 0.52
+# caustic-vertex-color 0
+Pr 0.42
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-87
+Kd 0.63 0.45 0.26
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-88
+Kd 0.71 0.51 0.3
+# caustic-vertex-color 0
+Pr 0.76
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-89
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-90
+Kd 0.53 0.4 0.24
+# caustic-vertex-color 0
+Pr 0.95
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-91
+Kd 0.17 0.13 0.084
+# caustic-vertex-color 0
+Pr 0.66
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-92
+Kd 0.27 0.35 0.35
+# caustic-vertex-color 0
+Pr 0.49
+Pm 0.7
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-93
+Kd 0.9 0.8 0.56
+# caustic-vertex-color 0
+Pr 0.56
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-94
+Kd 0.84 0.61 0.29
+# caustic-vertex-color 0
+Pr 0.29
+Pm 0.9
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-95
+Kd 0.079 0.275 0.3
+# caustic-vertex-color 0
+Pr 0.15
+norm -bm 1 textures/normal-15.png
+map_Pr textures/roughness-14.png
+
+newmtl material-96
+Kd 0.19 0.415 0.385
+# caustic-vertex-color 0
+Pr 0.49
+Pm 0.54
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-97
+Kd 0.66 0.215 0.121
+# caustic-vertex-color 0
+Pr 0.93
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-98
+Kd 0.69 0.55 0.32
+# caustic-vertex-color 0
+Pr 0.91
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-99
+Kd 0.73 0.337 0.182
+# caustic-vertex-color 0
+Pr 0.93
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-100
+Kd 0.91 0.392 0.18
+# caustic-vertex-color 0
+Pr 0.93
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-101
+Kd 0.83 0.32 0.151
+# caustic-vertex-color 0
+Pr 0.93
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-102
+Kd 0.46 0.215 0.099
+# caustic-vertex-color 0
+Pr 0.9
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-103
+Kd 0.86 0.745 0.54
+# caustic-vertex-color 0
+Pr 0.72
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-104
+Kd 0.92 0.82 0.62
+# caustic-vertex-color 0
+Pr 0.93
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-105
+Kd 0.142 0.175 0.102
+# caustic-vertex-color 0
+Pr 0.46
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-106
+Kd 0.148 0.164 0.138
+# caustic-vertex-color 0
+Pr 0.34
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-107
+Kd 0.295 0.275 0.217
+# caustic-vertex-color 0
+Pr 0.9
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-108
+Kd 0.78 0.9 0.75
+# caustic-vertex-color 0
+Pr 0.18
+map_Kd -clamp on textures/base-color-1.png
+norm -bm 1 -clamp on textures/normal-1.png
+map_Pr -clamp on textures/roughness-1.png
+
+newmtl material-109
+Kd 0.45 0.42 0.32
+# caustic-vertex-color 0
+Pr 0.51
+norm -bm 1 textures/normal-13.png
+map_Pr textures/roughness-12.png
+
+newmtl material-110
+Kd 0.255 0.225 0.166
+# caustic-vertex-color 0
+Pr 0.72
+norm -bm 1 textures/normal-13.png
+map_Pr textures/roughness-12.png
+
+newmtl material-111
+Kd 0.62 0.56 0.42
+# caustic-vertex-color 0
+Pr 0.37
+norm -bm 1 textures/normal-13.png
+map_Pr textures/roughness-12.png
+
+newmtl material-112
+Kd 0.35 0.43 0.49
+# caustic-vertex-color 0
+Pr 0.31
+norm -bm 1 textures/normal-13.png
+map_Pr textures/roughness-12.png
+
+newmtl material-113
+Kd 0.037 0.063 0.099
+# caustic-vertex-color 0
+Pr 0.27
+norm -bm 1 textures/normal-13.png
+map_Pr textures/roughness-12.png
+
+newmtl material-114
+Kd 0.164 0.191 0.047
+# caustic-vertex-color 0
+# caustic-double-sided 1
+Pr 0.32
+norm -bm 1 textures/normal-2.png
+map_Pr textures/roughness-2.png
+
+newmtl material-115
+Kd 0.304 0.164 0.042
+# caustic-vertex-color 0
+# caustic-double-sided 1
+Pr 0.31
+norm -bm 1 textures/normal-2.png
+map_Pr textures/roughness-2.png
+
+newmtl material-116
+Kd 0.61 0.162 0.049
+# caustic-vertex-color 0
+Pr 0.49
+# textures/normal-16.png <- sea-star-normal.png
+norm -bm 1 textures/normal-16.png
+# textures/roughness-15.png <- sea-star-roughness.png
+map_Pr textures/roughness-15.png
+
+newmtl material-117
+Kd 0.84 0.45 0.21
+# caustic-vertex-color 0
+Pr 0.58
+norm -bm 1 textures/normal-16.png
+map_Pr textures/roughness-15.png
+
+newmtl material-118
+Kd 0.54 0.47 0.37
+# caustic-vertex-color 0
+Pr 0.61
+norm -bm 1 textures/normal-13.png
+map_Pr textures/roughness-12.png
+
+newmtl material-119
+Kd 0.135 0.105 0.084
+# caustic-vertex-color 0
+Pr 0.37
+norm -bm 1 textures/normal-13.png
+map_Pr textures/roughness-12.png
+
+newmtl material-120
+Kd 0.53 0.53 0.46
+# caustic-vertex-color 0
+Pr 0.9
+map_Kd textures/base-color-3.png
+norm -bm 1 textures/normal-4.png
+map_Pr textures/roughness-4.png
+
+newmtl material-121
+Kd 0.39 0.26 0.13
+# caustic-vertex-color 0
+Pr 0.72
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-122
+Kd 0.62 0.31 0.13
+# caustic-vertex-color 0
+Pr 0.6
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-123
+Kd 0.63 0.45 0.26
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-124
+Kd 0.105 0.255 0.275
+# caustic-vertex-color 0
+Pr 0.53
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-125
+Kd 0.245 0.325 0.31
+# caustic-vertex-color 0
+Pr 0.63
+Pm 0.41
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-126
+Kd 0.27 0.35 0.35
+# caustic-vertex-color 0
+Pr 0.49
+Pm 0.7
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-127
+Kd 0.41 0.47 0.46
+# caustic-vertex-color 0
+Pr 0.31
+Pm 0.92
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-128
+Kd 0.89 0.78 0.54
+# caustic-vertex-color 0
+Pr 0.49
+map_Kd textures/base-color-4.png
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-129
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-130
+Kd 0.53 0.4 0.24
+# caustic-vertex-color 0
+Pr 0.95
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-131
+Kd 0.78 0.59 0.28
+# caustic-vertex-color 0
+Pr 0.27
+Pm 0.95
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-132
+Kd 0.16 0.4 0.34
+# caustic-vertex-color 0
+Pr 0.47
+Pm 0.63
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-133
+Kd 0.86 0.405 0.205
+# caustic-vertex-color 0
+Pr 0.93
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-134
+Kd 0.76 0.31 0.14
+# caustic-vertex-color 0
+Pr 0.89
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-135
+Kd 0.88 0.76 0.52
+# caustic-vertex-color 0
+Pr 0.79
+map_Kd textures/base-color-6.png
+norm -bm 1 textures/normal-14.png
+map_Pr textures/roughness-13.png
+
+newmtl material-136
+Kd 0.105 0.52 0.425
+# caustic-vertex-color 0
+Pr 0.16
+norm -bm 1 textures/normal-15.png
+map_Pr textures/roughness-14.png
+
+newmtl material-137
+Kd 1 1 1
+# caustic-vertex-color 1
+# caustic-double-sided 1
+Pr 0.74
+Pm 1
+# caustic-texture-sampling map {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# caustic-texture-sampling normalMap {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# textures/base-color-7.jpg <- modular_wooden_pier_planks_diff
+map_Kd textures/base-color-7.jpg
+# textures/normal-17.png <- pier-planks-normal.png
+norm -bm 1 textures/normal-17.png
+# textures/roughness-16.png <- pier-planks-roughness.png
+map_Pr textures/roughness-16.png
+# textures/metallic-0.png <- pier-planks-metallic.png
+map_Pm textures/metallic-0.png
+
+newmtl material-138
+Kd 1 1 1
+# caustic-vertex-color 1
+# caustic-double-sided 1
+Pr 0.74
+Pm 0
+# caustic-texture-sampling map {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# caustic-texture-sampling normalMap {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# textures/base-color-8.jpg <- modular_wooden_pier_poles_diff
+map_Kd textures/base-color-8.jpg
+# textures/normal-18.png <- pier-poles-normal.png
+norm -bm 1 textures/normal-18.png
+# textures/roughness-17.png <- pier-poles-roughness.png
+map_Pr textures/roughness-17.png
+
+newmtl material-139
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-140
+Kd 0.53 0.4 0.24
+# caustic-vertex-color 0
+Pr 0.95
+norm -bm 1 textures/normal-7.png
+map_Pr textures/roughness-6.png
+
+newmtl material-141
+Kd 0.059 0.207 0.188
+# caustic-vertex-color 0
+Pr 0.53
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-142
+Kd 0.82 0.55 0.33
+# caustic-vertex-color 0
+Pr 0.78
+Pm 0
+# caustic-texture-sampling map {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# caustic-texture-sampling normalMap {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+map_Kd textures/base-color-7.jpg
+norm -bm 1 textures/normal-17.png
+map_Pr textures/roughness-16.png
+
+newmtl material-143
+Kd 0.036 0.154 0.155
+# caustic-vertex-color 0
+Pr 0.34
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-144
+Kd 0.94 0.68 0.43
+# caustic-vertex-color 0
+Pr 0.71
+Pm 0
+# caustic-texture-sampling map {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# caustic-texture-sampling normalMap {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+map_Kd textures/base-color-7.jpg
+norm -bm 1 textures/normal-17.png
+map_Pr textures/roughness-16.png
+
+newmtl material-145
+Kd 0.028 0.079 0.071
+# caustic-vertex-color 0
+Pr 0.75
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-146
+Kd 0.39 0.21 0.091
+# caustic-vertex-color 0
+Pr 0.28
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-147
+Kd 0.75 0.65 0.42
+# caustic-vertex-color 0
+Pr 0.42
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-148
+Kd 0.32 0.23 0.13
+# caustic-vertex-color 0
+Pr 0.38
+Pm 0.72
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-149
+Kd 0.55 0.35 0.16
+# caustic-vertex-color 0
+Pr 0.46
+norm -bm 0.5 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-150
+Kd 1 1 1
+# caustic-vertex-color 0
+# caustic-double-sided 1
+Pr 1
+Pm 1
+# caustic-texture-sampling map {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# caustic-texture-sampling normalMap {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# caustic-texture-sampling metallicRoughnessMap {"uvSet":0,"rotation":0,"sampler":{"addressModeU":"repeat","addressModeV":"repeat","magFilter":"linear","minFilter":"linear","mipmapFilter":"linear"}}
+# textures/base-color-9.jpg <- treasure_chest_diff
+map_Kd textures/base-color-9.jpg
+# textures/normal-19.png <- chest-scan-normal.png
+norm -bm 1 textures/normal-19.png
+# caustic-normal-y-sign -1
+# textures/metallic-roughness-1.png <- chest-mr.png
+map_Pr -imfchan g textures/metallic-roughness-1.png
+map_Pm -imfchan b textures/metallic-roughness-1.png
+
+newmtl material-151
+Kd 0.39 0.26 0.13
+# caustic-vertex-color 0
+Pr 0.72
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-152
+Kd 0.63 0.45 0.26
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-153
+Kd 0.62 0.31 0.13
+# caustic-vertex-color 0
+Pr 0.6
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-154
+Kd 0.39 0.26 0.13
+# caustic-vertex-color 0
+Pr 0.72
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-155
+Kd 0.63 0.45 0.26
+# caustic-vertex-color 0
+Pr 0.86
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-156
+Kd 0.62 0.31 0.13
+# caustic-vertex-color 0
+Pr 0.6
+map_Kd textures/base-color-4.png
+norm -bm 1 textures/normal-6.png
+map_Pr textures/roughness-5.png
+
+newmtl material-157
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-158
+Kd 0.19 0.2 0.19
+# caustic-vertex-color 0
+Pr 0.41
+Pm 0.82
+norm -bm 1 textures/normal-5.png
+map_Pr -imfchan g textures/metallic-roughness-0.png
+map_Pm -imfchan b textures/metallic-roughness-0.png
+
+newmtl material-159
+Kd 0.76 0.6 0.3
+# caustic-vertex-color 0
+Pr 0.16
+norm -bm 1 textures/normal-15.png
+map_Pr textures/roughness-14.png

@@ -1,18 +1,27 @@
-import { mat4 } from 'wgpu-matrix'
 import type { Mat4 } from 'wgpu-matrix'
 import { config } from '../config'
 import type { ForwardResult } from '../contracts'
 import { sceneAlbedoFormat, type SceneGeometry } from './scene-mesh'
+import type { SceneSurfaceMode } from './scene-renderer'
 import { createRoomLightPaths } from './room-light-paths'
+import { createBeamFrame } from './beam-frame'
+import apertureUV from './shaders/aperture-uv.wgsl?raw'
 import commonShader from './shaders/beam-common.wgsl?raw'
+import roomRadiance from './shaders/room-radiance.wgsl?raw'
 import coverageShader from './shaders/pixel-coverage.wgsl?raw'
 import hitTypes from './shaders/scene-hit.wgsl?raw'
 import splatShader from './shaders/hit-splat.wgsl?raw'
 import beamShader from './shaders/beam.wgsl?raw'
 import roomCompositeShader from './shaders/room-composite.wgsl?raw'
 
-const modeId = { lit: 0, candidates: 1, irradiance: 2, normals: 3, albedo: 4 }
+const modeId = {
+  lit: 0, candidates: 1, irradiance: 2, normals: 3, albedo: 4,
+  'geometric-normals': 5, 'normal-map': 6, roughness: 7, metallic: 8,
+  occlusion: 9, emissive: 10, 'map-coverage': 11,
+}
 export type BeamView = keyof typeof modeId
+const viewConstants = Object.entries(modeId).map(([name, index]) =>
+  `const VIEW_${name.replaceAll('-', '_').toUpperCase()} = ${index}u;`).join('\n')
 
 const clear = (view: GPUTextureView): GPURenderPassColorAttachment => ({
   view, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0],
@@ -26,20 +35,25 @@ export function createBeamRenderer(
   let exposure = initialExposure
   let environmentLight = 0, incidentIrradiance = 1
   let lightPathsVisible = true
-  const data = new Float32Array(44)
-  const words = new Uint32Array(data.buffer)
-  const localVP = data.subarray(0, 16)
-  const inverseLocalVP = data.subarray(16, 32)
-  const uniform = device.createBuffer({
-    label: 'Beam frame', size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-  })
+  let colorFilter: GPUTextureView | undefined
+  let filterRevision = 0
+  const frame = createBeamFrame(device, opticalToWorld, 'Beam frame')
+  const { uniform, localVP, inverseLocalVP } = frame
   const module = device.createShaderModule({
-    label: 'Scene beam rendering', code: [commonShader, coverageShader, beamShader, roomCompositeShader, hitTypes, splatShader].join('\n'),
+    label: 'Scene beam rendering', code: [viewConstants, apertureUV, commonShader, roomRadiance, coverageShader, beamShader, roomCompositeShader, hitTypes, splatShader].join('\n'),
   })
+  // WebGPU still requires the binding when the white-light path skips the lookup.
+  const emptyFilter = device.createTexture({
+    label: 'Unused aperture filter', size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING,
+  })
+  const emptyFilterView = emptyFilter.createView()
   const fieldLayout = device.createBindGroupLayout({
-    entries: [0, 1, 2].map(binding => ({
-      binding, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' },
-    })),
+    entries: [
+      ...[0, 1, 2].map((binding): GPUBindGroupLayoutEntry => ({
+        binding, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' },
+      })),
+      { binding: 5, visibility: GPUShaderStage.VERTEX, texture: { sampleType: 'unfilterable-float' } },
+    ],
   })
   function frameLayout(entries: GPUBindGroupLayoutEntry[]) {
     return device.createBindGroupLayout({ entries: [
@@ -59,7 +73,7 @@ export function createBeamRenderer(
   let previousHits: ForwardResult['firstHits']
   const add: GPUBlendComponent = { srcFactor: 'one', dstFactor: 'one', operation: 'add' }
   // Dense subpixel footprints can contribute hundreds of small terms per pixel.
-  const screenFormat = device.features.has('float32-blendable') ? 'rg32float' : 'rg16float'
+  const screenFormat = device.features.has('float32-blendable') ? 'rgba32float' : 'rgba16float'
   const splat = device.createRenderPipeline({
     label: 'Local first-hit footprints',
     layout: device.createPipelineLayout({ bindGroupLayouts: [splatFrame, fieldLayout, hitLayout] }),
@@ -72,6 +86,8 @@ export function createBeamRenderer(
     { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
     { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
     { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
+    { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } },
+    { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'uint' } },
   ])
   const pathLayout = device.createBindGroupLayout({
     entries: [3, 4].map(binding => ({ binding, visibility: GPUShaderStage.FRAGMENT, texture: {} })),
@@ -83,6 +99,7 @@ export function createBeamRenderer(
       fragment: { module, entryPoint, targets: [{ format: canvasFormat }], constants: {
         materialLighting: Number(!!materials?.size),
         encodeCanvas: Number(canvasFormat === 'rgba8unorm' || canvasFormat === 'bgra8unorm'),
+        ...(entryPoint === 'compositeFS' ? { srgbDebugTarget: Number(canvasFormat.endsWith('-srgb')) } : {}),
       } },
     })
   }
@@ -100,23 +117,25 @@ export function createBeamRenderer(
     const albedo = texture('Scene albedo and occupancy', sceneAlbedoFormat(materials), width, height)
     const normal = texture('Optical-local normal and floor mask', 'rgba8unorm', width, height)
     const object = texture('Visible object and geometric normal', 'rg32uint', width, height)
+    const material = texture('Surface material and emission', 'rg32uint', width, height)
     const depth = texture('Scene depth', 'depth24plus', width, height)
     const light = texture('Beam irradiance and candidate count', screenFormat, width, height)
     const albedoView = albedo.createView(), normalView = normal.createView()
     const depthView = depth.createView(), lightView = light.createView()
-    const objectView = object.createView()
+    const objectView = object.createView(), materialView = material.createView()
     const normalEntry = { binding: 2, resource: normalView }
     const splatGroup = device.createBindGroup({ layout: splatFrame, entries: [
       uniformEntry, { binding: 1, resource: depthView }, normalEntry, { binding: 5, resource: objectView },
     ] })
     const compositeGroup = device.createBindGroup({
-      layout: composite.getBindGroupLayout(0),
+      layout: compositeLayout,
       entries: [uniformEntry, { binding: 1, resource: depthView }, normalEntry,
-        { binding: 3, resource: albedoView }, { binding: 4, resource: lightView }],
+        { binding: 3, resource: albedoView }, { binding: 4, resource: lightView },
+        { binding: 5, resource: objectView }, { binding: 6, resource: materialView }],
     })
     return {
-      width, height, albedoView, normalView, depthView, lightView, objectView, splatGroup, compositeGroup,
-      destroy() { for (const t of [albedo, normal, object, depth, light]) t.destroy() },
+      width, height, albedoView, normalView, depthView, lightView, objectView, materialView, splatGroup, compositeGroup,
+      destroy() { for (const t of [albedo, normal, object, material, depth, light]) t.destroy() },
     }
   }
 
@@ -156,12 +175,17 @@ export function createBeamRenderer(
     setLightPathsVisible(value: boolean) {
       lightPathsVisible = value
     },
+    setColorFilter(view: GPUTextureView | undefined, revision = 0) {
+      if (colorFilter !== view) boundField = undefined
+      colorFilter = view
+      filterRevision = revision
+    },
 
     render(
       encoder: GPUCommandEncoder, output: GPUTexture, viewProjection: Mat4,
       mode: BeamView, result: ForwardResult,
-      drawScene: (pass: GPURenderPassEncoder) => void,
-      training = false,
+      drawScene: (pass: GPURenderPassEncoder, mode: SceneSurfaceMode) => void,
+      training = false, materialsEnabled = true,
     ) {
       const { beams: field } = result
       const lens = field.lens
@@ -174,27 +198,22 @@ export function createBeamRenderer(
           group: device.createBindGroup({ layout: fieldLayout, entries: [
             { binding: 0, resource: { buffer: lens.heightBuffer } }, { binding: 1, resource: { buffer: field.buffer } },
             { binding: 2, resource: { buffer: offsets } },
+            { binding: 5, resource: colorFilter ?? emptyFilterView },
           ] }),
         }
       }
-      mat4.multiply(viewProjection, opticalToWorld, localVP)
-      mat4.inverse(localVP, inverseLocalVP)
-      // WGSL Frame offsets in 32-bit words, after the two matrices.
-      words.set([lens.columns, lens.rows], 32)
-      data.set([lens.sizeX, lens.sizeY], 34)
-      data[36] = environmentLight
-      data[37] = Math.max(incidentIrradiance, 1e-6)
-      data.set([output.width, output.height], 38)
-      words[40] = modeId[mode]
-      data[41] = exposure
-      device.queue.writeBuffer(uniform, 0, data)
+      const baseColorOnly = mode === 'lit' && !materialsEnabled
+      frame.update(viewProjection, lens, output.width, output.height, modeId[mode],
+        { environmentLight, incidentIrradiance, exposure, colorFilter, materialsEnabled: !baseColorOnly })
 
       const targets = screenFor(output)
       const geometry = encoder.beginRenderPass({
-        label: 'Scene G-buffer', colorAttachments: [clear(targets.albedoView), clear(targets.normalView), clear(targets.objectView)],
+        label: 'Scene G-buffer', colorAttachments: [clear(targets.albedoView), clear(targets.normalView),
+          clear(targets.objectView), clear(targets.materialView)],
         depthStencilAttachment: { view: targets.depthView, depthLoadOp: 'clear', depthClearValue: 1, depthStoreOp: 'store' },
       })
-      drawScene(geometry)
+      const inspectMaps = mode === 'normal-map' || mode === 'map-coverage'
+      drawScene(geometry, baseColorOnly ? 'base-color' : inspectMaps ? 'map-inspection' : 'material')
       geometry.end()
 
       const hits = result.firstHits
@@ -206,7 +225,7 @@ export function createBeamRenderer(
         previousHits = hits
       }
       // G-buffer views do not need to rasterize millions of beam footprints.
-      if (mode !== 'normals' && mode !== 'albedo') {
+      if (mode === 'lit' || mode === 'candidates' || mode === 'irradiance') {
         const pass = encoder.beginRenderPass({ label: 'Splat first hits', colorAttachments: [clear(targets.lightView)] })
         pass.setPipeline(splat)
         pass.setBindGroup(0, targets.splatGroup)
@@ -220,7 +239,7 @@ export function createBeamRenderer(
       if (mode === 'lit' && lightPathsVisible) {
         paths ??= createRoomLightPaths(device, pathLayout)
         pathGroup = paths.prepare(encoder, output, targets.depthView, localVP, inverseLocalVP,
-          result, offsets, incidentIrradiance, relativeIOR, training)
+          result, offsets, incidentIrradiance, relativeIOR, training, colorFilter, filterRevision)
       }
       const show = encoder.beginRenderPass({
         label: 'Display beam lighting', colorAttachments: [clear(output.createView())],
@@ -234,7 +253,8 @@ export function createBeamRenderer(
     destroy() {
       paths?.destroy()
       screen?.destroy()
-      uniform.destroy()
+      frame.destroy()
+      emptyFilter.destroy()
       zeroOffsets?.destroy()
     },
   }
